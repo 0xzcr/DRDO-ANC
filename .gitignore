@@ -13,3 +13,6 @@ models/*.onnx
 
 .ipynb_checkpoints/
 .vscode/
+
+external/
+.venv/
