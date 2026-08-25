@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+data/generated/
+models/*.pth
+models/*.pt
+models/*.onnx
+
+*.wav
+*.mp3
+*.flac
+
+.ipynb_checkpoints/
+.vscode/
