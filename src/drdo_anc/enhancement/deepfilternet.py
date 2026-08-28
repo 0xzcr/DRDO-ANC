@@ -86,6 +86,17 @@ class DeepFilterNetEnhancer(Enhancer):
 
         return self._sample_rate
 
+    def process_stream(self, audio_chunk: torch.Tensor) -> torch.Tensor:
+        """
+        Enhance one streaming chunk.
+
+        Streaming DeepFilterNet processing is not implemented yet.
+        """
+
+        raise NotImplementedError(
+            "DeepFilterNet streaming processing has not been implemented yet."
+        )
+
     def name(self) -> str:
         """Return the model name."""
 

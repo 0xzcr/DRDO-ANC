@@ -13,7 +13,17 @@ class Enhancer(ABC):
 
     @abstractmethod
     def process(self, audio: torch.Tensor) -> torch.Tensor:
-        """Enhance an audio tensor and return the enhanced audio."""
+        """Enhance a complete audio tensor."""
+        pass
+
+    @abstractmethod
+    def process_stream(self, audio_chunk: torch.Tensor) -> torch.Tensor:
+        """
+        Enhance one streaming audio chunk.
+
+        Streaming implementations must preserve the necessary
+        model and processing state between calls.
+        """
         pass
 
     @abstractmethod
