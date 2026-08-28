@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 
 import numpy as np
 import soundfile as sf
@@ -16,6 +17,22 @@ def load_mono_wav(path: Path) -> tuple[np.ndarray, int]:
         raise ValueError(
             f"Expected mono audio in {path.name}, "
             f"got shape {audio.shape}"
+        )
+
+    return audio, sample_rate
+
+
+def load_mono_wav_bytes(data: bytes) -> tuple[np.ndarray, int]:
+    """Load a mono float32 WAV file from in-memory bytes."""
+
+    audio, sample_rate = sf.read(
+        io.BytesIO(data),
+        dtype="float32",
+    )
+
+    if audio.ndim != 1:
+        raise ValueError(
+            f"Expected mono audio bytes, got shape {audio.shape}"
         )
 
     return audio, sample_rate

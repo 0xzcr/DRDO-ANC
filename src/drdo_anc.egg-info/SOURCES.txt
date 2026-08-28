@@ -14,8 +14,12 @@ src/drdo_anc/benchmark/result.py
 src/drdo_anc/benchmark/runner.py
 src/drdo_anc/dataset/__init__.py
 src/drdo_anc/dataset/list_dataset.py
+src/drdo_anc/dataset/manifest.py
 src/drdo_anc/dataset/protocol.py
 src/drdo_anc/dataset/sample.py
+src/drdo_anc/dataset/source_sample.py
+src/drdo_anc/dataset/zip_access.py
+src/drdo_anc/dataset/zip_manifest_dataset.py
 src/drdo_anc/enhancement/__init__.py
 src/drdo_anc/enhancement/base.py
 src/drdo_anc/enhancement/deepfilternet.py
