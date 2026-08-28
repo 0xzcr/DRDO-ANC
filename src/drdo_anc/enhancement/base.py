@@ -4,6 +4,7 @@ import torch
 
 
 class Enhancer(ABC):
+
     """Abstract interface for speech-enhancement models."""
 
     @abstractmethod
@@ -18,12 +19,12 @@ class Enhancer(ABC):
 
     @abstractmethod
     def process_stream(self, audio_chunk: torch.Tensor) -> torch.Tensor:
-        """
-        Enhance one streaming audio chunk.
+        """Enhance an arbitrary-sized audio chunk."""
+        pass
 
-        Streaming implementations must preserve the necessary
-        model and processing state between calls.
-        """
+    @abstractmethod
+    def flush(self) -> torch.Tensor:
+        """Finish the current stream and return buffered output."""
         pass
 
     @abstractmethod
@@ -33,7 +34,7 @@ class Enhancer(ABC):
 
     @abstractmethod
     def sample_rate(self) -> int:
-        """Return the sample rate expected by the enhancer."""
+        """Return the expected sample rate."""
         pass
 
     @abstractmethod

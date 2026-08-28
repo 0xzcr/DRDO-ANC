@@ -200,8 +200,126 @@ class DeepFilterNetEnhancer(Enhancer):
             )
         )
 
+    def flush(self) -> torch.Tensor:
+        """
+        Finish the current streaming sequence.
+
+        Any remaining partial frame is zero-padded to one complete
+        DeepFilterNet frame. Only output corresponding to the original
+        buffered samples is returned.
+        """
+
+        if self._native_backend is None:
+            raise RuntimeError(
+                "Streaming backend is not loaded. "
+                "Call load() before flush()."
+            )
+
+        if self._stream_buffer is None:
+            raise RuntimeError(
+                "Streaming buffer is not initialized."
+            )
+
+        pending = self._stream_buffer.pending_samples()
+
+        if pending == 0:
+            return torch.empty(
+                0,
+                dtype=torch.float32,
+            )
+
+        frame_length = self._native_backend.frame_length()
+
+        if pending >= frame_length:
+            raise RuntimeError(
+                "Streaming buffer contains a complete frame. "
+                "This indicates a buffer management error."
+            )
+
+        # Retrieve and clear the remaining real samples.
+        buffered = self._stream_buffer.flush()
+
+        # Complete the frame with zeros.
+        padded = np.zeros(
+            frame_length,
+            dtype=np.float32,
+        )
+
+        padded[:pending] = buffered
+
+        # Process the final padded frame.
+        enhanced = self._native_backend.process_frame(
+            padded
+        )
+
+        # Discard output corresponding to artificial zero padding.
+        enhanced = enhanced[:pending]
+
+        return torch.from_numpy(
+            enhanced.astype(
+                np.float32,
+                copy=False,
+            )
+        )
+        """
+        Finish the current streaming sequence.
+
+        Any remaining partial frame is zero-padded to one complete
+        DeepFilterNet frame. Only output corresponding to the original
+        buffered samples is returned.
+        """
+
+        if self._native_backend is None:
+            raise RuntimeError(
+                "Streaming backend is not loaded. "
+                "Call load() before flush()."
+            )
+
+        if self._stream_buffer is None:
+            raise RuntimeError(
+                "Streaming buffer is not initialized."
+            )
+
+        pending = self._stream_buffer.pending()
+
+        if pending == 0:
+            return torch.empty(
+                0,
+                dtype=torch.float32,
+            )
+
+        frame_length = self._native_backend.frame_length()
+
+        # We need enough zeros to complete one DF frame.
+        padding = frame_length - pending
+
+        padded = np.zeros(
+            frame_length,
+            dtype=np.float32,
+        )
+
+        # Copy the real buffered samples into the beginning.
+        buffered = self._stream_buffer.flush()
+
+        padded[:pending] = buffered
+
+        # Process the complete padded frame.
+        enhanced = self._native_backend.process_frame(
+            padded
+        )
+
+        # Only return samples corresponding to real input.
+        enhanced = enhanced[:pending]
+
+        return torch.from_numpy(
+            enhanced.astype(
+                np.float32,
+                copy=False,
+            )
+        )
+
     def reset(self) -> None:
-        """Reset the native streaming state and input buffer."""
+        """Reset native DF3 state and streaming buffer."""
 
         if self._native_backend is None:
             raise RuntimeError(
