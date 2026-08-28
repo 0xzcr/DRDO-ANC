@@ -2,11 +2,11 @@ from pathlib import Path
 
 import numpy as np
 
-from evaluate import (
+from drdo_anc.evaluation import (
     apply_evaluation_delay,
     evaluate_model,
-    load_audio,
 )
+from evaluate import load_audio
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

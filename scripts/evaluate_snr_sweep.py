@@ -3,10 +3,15 @@ from pathlib import Path
 
 import soundfile as sf
 
-from evaluate import (
+from drdo_anc.evaluation import (
     apply_evaluation_delay,
+    evaluate_model,
     evaluate_pair,
     format_delay_compensation,
+    calculate_pesq,
+    calculate_si_sdr,
+    calculate_snr,
+    calculate_stoi,
 )
 
 
