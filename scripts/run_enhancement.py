@@ -1,5 +1,6 @@
-from pathlib import Path
+import argparse
 import time
+from pathlib import Path
 
 import soundfile as sf
 import torch
@@ -7,15 +8,47 @@ import torch
 from drdo_anc.enhancement import DeepFilterNetEnhancer
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run a speech-enhancement model."
+    )
 
-INPUT_PATH = PROJECT_ROOT / "data" / "raw" / "noisy_snr0.wav"
-OUTPUT_PATH = (
-    PROJECT_ROOT / "data" / "enhanced" / "noisy_snr0_abstraction.wav"
-)
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Input noisy WAV file.",
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Output enhanced WAV file.",
+    )
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="DeepFilterNet3",
+        help="Model name. Currently only DeepFilterNet3 is supported.",
+    )
+
+    return parser.parse_args()
 
 
 def main():
+    args = parse_args()
+
+    input_path = args.input.resolve()
+    output_path = args.output.resolve()
+
+    if args.model != "DeepFilterNet3":
+        raise ValueError(
+            f"Unsupported model: {args.model}. "
+            "Currently only DeepFilterNet3 is available."
+        )
+
     print("=" * 60)
     print("DRDO-ANC | Model-Agnostic Enhancement")
     print("=" * 60)
@@ -25,11 +58,16 @@ def main():
     # ---------------------------------------------------------
 
     audio_np, sample_rate = sf.read(
-        INPUT_PATH,
+        input_path,
         dtype="float32",
     )
 
-    print(f"Input:       {INPUT_PATH}")
+    if audio_np.ndim != 1:
+        raise ValueError(
+            f"Expected mono input, got shape {audio_np.shape}"
+        )
+
+    print(f"Input:       {input_path}")
     print(f"Sample rate: {sample_rate} Hz")
     print(f"Samples:     {len(audio_np)}")
 
@@ -87,8 +125,13 @@ def main():
         .numpy()
     )
 
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     sf.write(
-        OUTPUT_PATH,
+        output_path,
         enhanced_np,
         sample_rate,
     )
@@ -98,9 +141,9 @@ def main():
 
     print("\nEnhancement complete.")
     print(f"Model:       {enhancer.name()}")
-    print(f"Output:      {OUTPUT_PATH}")
+    print(f"Output:      {output_path}")
     print(f"Duration:    {duration:.3f} s")
-    print(f"Inference:   {elapsed:.3f} s")
+    print(f"Inference:  {elapsed:.3f} s")
     print(f"RTF:         {realtime_factor:.2f}x")
     print("=" * 60)
 
