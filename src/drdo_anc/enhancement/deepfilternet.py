@@ -1,8 +1,13 @@
+from pathlib import Path
+
+import numpy as np
 import torch
 
 from df import enhance, init_df
 
 from .base import Enhancer
+from .native import NativeDF3Backend
+from .streaming import StreamingBuffer
 
 
 class DeepFilterNetEnhancer(Enhancer):
@@ -12,11 +17,19 @@ class DeepFilterNetEnhancer(Enhancer):
         self.model = None
         self.df_state = None
         self.device = None
+
         self._sample_rate = None
         self._name = "DeepFilterNet3"
 
+        self._native_backend = None
+        self._stream_buffer = None
+
     def load(self) -> None:
-        """Load DeepFilterNet3 and its processing state."""
+        """Load DeepFilterNet3 and initialize offline and streaming backends."""
+
+        # ---------------------------------------------------------
+        # Offline PyTorch backend
+        # ---------------------------------------------------------
 
         self.model, self.df_state, suffix, epoch = init_df()
 
@@ -29,8 +42,49 @@ class DeepFilterNetEnhancer(Enhancer):
         print(f"Device:      {self.device}")
         print(f"DF rate:     {self._sample_rate} Hz")
 
+        # ---------------------------------------------------------
+        # Native streaming backend
+        # ---------------------------------------------------------
+
+        project_root = Path(__file__).resolve().parents[3]
+
+        dll_path = (
+            project_root
+            / "external"
+            / "DeepFilterNet"
+            / "target"
+            / "release"
+            / "df.dll"
+        )
+
+        model_path = (
+            project_root
+            / "external"
+            / "DeepFilterNet"
+            / "models"
+            / "DeepFilterNet3_onnx.tar.gz"
+        )
+
+        self._native_backend = NativeDF3Backend(
+            dll_path=dll_path,
+            model_path=model_path,
+        )
+
+        self._native_backend.load()
+
+        self._stream_buffer = StreamingBuffer(
+            self._native_backend.frame_length()
+        )
+
+        # Sanity check: both backends must use the same sample rate.
+        if self._sample_rate != 48_000:
+            raise ValueError(
+                f"Expected DeepFilterNet sample rate to be 48000 Hz, "
+                f"got {self._sample_rate}"
+            )
+
     def process(self, audio: torch.Tensor) -> torch.Tensor:
-        """Enhance an audio tensor using DeepFilterNet."""
+        """Enhance a complete audio signal using the offline PyTorch backend."""
 
         if self.model is None or self.df_state is None:
             raise RuntimeError(
@@ -59,22 +113,106 @@ class DeepFilterNetEnhancer(Enhancer):
             audio,
         )
 
-    def reset(self) -> None:
+    def process_stream(
+        self,
+        audio_chunk: torch.Tensor,
+    ) -> torch.Tensor:
         """
-        Reset processing state.
+        Enhance an arbitrary-sized mono audio chunk using native DF3 streaming.
 
-        DeepFilterNet maintains internal state required for continuous
-        processing. The exact state-reset mechanism will be handled when
-        the streaming API is implemented.
+        Input:
+            [T] or [1, T]
 
-        For now, reset is intentionally not implemented rather than
-        incorrectly reloading the entire model.
+        Output:
+            [T_enhanced]
+
+        The output may contain fewer samples than the input because
+        incomplete frames remain buffered internally.
         """
 
-        raise NotImplementedError(
-            "DeepFilterNet state reset will be implemented with the "
-            "streaming processing API."
+        if self._native_backend is None:
+            raise RuntimeError(
+                "Streaming backend is not loaded. "
+                "Call load() before process_stream()."
+            )
+
+        if self._stream_buffer is None:
+            raise RuntimeError(
+                "Streaming buffer is not initialized."
+            )
+
+        if not isinstance(audio_chunk, torch.Tensor):
+            raise TypeError(
+                f"Expected torch.Tensor, "
+                f"got {type(audio_chunk).__name__}"
+            )
+
+        if audio_chunk.ndim not in (1, 2):
+            raise ValueError(
+                f"Expected audio with 1 or 2 dimensions, "
+                f"got {audio_chunk.ndim}"
+            )
+
+        if not audio_chunk.is_floating_point():
+            audio_chunk = audio_chunk.float()
+
+        # Streaming backend currently supports mono only.
+        if audio_chunk.ndim == 2:
+            if audio_chunk.shape[0] != 1:
+                raise ValueError(
+                    "Streaming currently supports mono audio only."
+                )
+
+            audio_chunk = audio_chunk.squeeze(0)
+
+        # Torch → NumPy
+        audio_np = (
+            audio_chunk
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float32, copy=False)
         )
+
+        # Split arbitrary chunk into complete DF frames.
+        frames = self._stream_buffer.append(audio_np)
+
+        if not frames:
+            return torch.empty(
+                0,
+                dtype=torch.float32,
+            )
+
+        # Process every complete frame.
+        enhanced_frames = [
+            self._native_backend.process_frame(frame)
+            for frame in frames
+        ]
+
+        enhanced = np.concatenate(
+            enhanced_frames
+        )
+
+        return torch.from_numpy(
+            enhanced.astype(
+                np.float32,
+                copy=False,
+            )
+        )
+
+    def reset(self) -> None:
+        """Reset the native streaming state and input buffer."""
+
+        if self._native_backend is None:
+            raise RuntimeError(
+                "Streaming backend is not loaded. "
+                "Call load() before reset()."
+            )
+
+        self._native_backend.reset()
+
+        if self._stream_buffer is not None:
+            self._stream_buffer.clear()
 
     def sample_rate(self) -> int:
         """Return the sample rate expected by DeepFilterNet."""
@@ -85,17 +223,6 @@ class DeepFilterNetEnhancer(Enhancer):
             )
 
         return self._sample_rate
-
-    def process_stream(self, audio_chunk: torch.Tensor) -> torch.Tensor:
-        """
-        Enhance one streaming chunk.
-
-        Streaming DeepFilterNet processing is not implemented yet.
-        """
-
-        raise NotImplementedError(
-            "DeepFilterNet streaming processing has not been implemented yet."
-        )
 
     def name(self) -> str:
         """Return the model name."""
