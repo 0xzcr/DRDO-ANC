@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -9,16 +10,14 @@ from scipy.signal import resample_poly
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-CLEAN_PATH = PROJECT_ROOT / "data" / "raw" / "clean_freesound_33711.wav"
-NOISY_PATH = PROJECT_ROOT / "data" / "raw" / "noisy_snr0.wav"
-ENHANCED_PATH = (
-    PROJECT_ROOT / "data" / "enhanced" / "noisy_snr0_abstraction.wav"
-)
-
 
 def load_audio(path: Path):
     """Load a mono float32 WAV file."""
-    audio, sample_rate = sf.read(path, dtype="float32")
+
+    audio, sample_rate = sf.read(
+        path,
+        dtype="float32",
+    )
 
     if audio.ndim != 1:
         raise ValueError(
@@ -37,7 +36,9 @@ def validate_audio(clean, noisy, enhanced, sample_rates):
     if not (clean_sr == noisy_sr == enhanced_sr):
         raise ValueError(
             f"Sample rates do not match: "
-            f"clean={clean_sr}, noisy={noisy_sr}, enhanced={enhanced_sr}"
+            f"clean={clean_sr}, "
+            f"noisy={noisy_sr}, "
+            f"enhanced={enhanced_sr}"
         )
 
     if not (len(clean) == len(noisy) == len(enhanced)):
@@ -74,9 +75,14 @@ def calculate_si_sdr(reference, estimate):
     reference_energy = np.sum(reference**2)
 
     if reference_energy < 1e-12:
-        raise ValueError("Reference signal has almost no energy.")
+        raise ValueError(
+            "Reference signal has almost no energy."
+        )
 
-    scale = np.sum(estimate * reference) / reference_energy
+    scale = (
+        np.sum(estimate * reference)
+        / reference_energy
+    )
 
     target = scale * reference
     noise = estimate - target
@@ -126,7 +132,46 @@ def calculate_pesq(clean, estimate, sample_rate):
     )
 
 
+def parse_args():
+    """Parse command-line arguments."""
+
+    parser = argparse.ArgumentParser(
+        description="Evaluate a speech-enhancement model."
+    )
+
+    parser.add_argument(
+        "--clean",
+        type=Path,
+        required=True,
+        help="Clean reference WAV file.",
+    )
+
+    parser.add_argument(
+        "--noisy",
+        type=Path,
+        required=True,
+        help="Noisy input WAV file.",
+    )
+
+    parser.add_argument(
+        "--enhanced",
+        type=Path,
+        required=True,
+        help="Enhanced output WAV file.",
+    )
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="Model name.",
+    )
+
+    return parser.parse_args()
+
+
 def print_results(
+    model,
     noisy_snr,
     enhanced_snr,
     noisy_si_sdr,
@@ -136,14 +181,24 @@ def print_results(
     noisy_pesq,
     enhanced_pesq,
 ):
-    print()
-    print("=" * 70)
-    print("DRDO-ANC | Objective Evaluation")
-    print("=" * 70)
+    """Print evaluation results."""
 
     print()
-    print(f"{'Metric':<20} {'Noisy':>15} {'Enhanced':>15} {'Change':>15}")
-    print("-" * 70)
+    print("=" * 75)
+    print("DRDO-ANC | Objective Evaluation")
+    print("=" * 75)
+
+    print(f"Model: {model}")
+
+    print()
+    print(
+        f"{'Metric':<20}"
+        f"{'Noisy':>15}"
+        f"{'Enhanced':>15}"
+        f"{'Change':>15}"
+    )
+
+    print("-" * 75)
 
     print(
         f"{'SNR (dB)':<20}"
@@ -173,20 +228,23 @@ def print_results(
         f"{enhanced_pesq - noisy_pesq:>15.4f}"
     )
 
-    print("=" * 70)
+    print("=" * 75)
+
 
 def main():
-    print("=" * 70)
+    args = parse_args()
+
+    clean_path = args.clean.resolve()
+    noisy_path = args.noisy.resolve()
+    enhanced_path = args.enhanced.resolve()
+
+    print("=" * 75)
     print("DRDO-ANC | Objective Evaluation")
-    print("=" * 70)
+    print("=" * 75)
 
-    # ---------------------------------------------------------
-    # Load signals
-    # ---------------------------------------------------------
-
-    clean, clean_sr = load_audio(CLEAN_PATH)
-    noisy, noisy_sr = load_audio(NOISY_PATH)
-    enhanced, enhanced_sr = load_audio(ENHANCED_PATH)
+    clean, clean_sr = load_audio(clean_path)
+    noisy, noisy_sr = load_audio(noisy_path)
+    enhanced, enhanced_sr = load_audio(enhanced_path)
 
     validate_audio(
         clean,
@@ -195,27 +253,47 @@ def main():
         (clean_sr, noisy_sr, enhanced_sr),
     )
 
-    print(f"Clean:     {CLEAN_PATH.name}")
-    print(f"Noisy:     {NOISY_PATH.name}")
-    print(f"Enhanced:  {ENHANCED_PATH.name}")
-    print(f"Sample rate: {clean_sr} Hz")
-    print(f"Samples:     {len(clean)}")
-    print(f"Duration:    {len(clean) / clean_sr:.3f} s")
-
-    # ---------------------------------------------------------
-    # Calculate metrics
-    # ---------------------------------------------------------
+    print(f"Model:        {args.model}")
+    print(f"Clean:        {clean_path}")
+    print(f"Noisy:        {noisy_path}")
+    print(f"Enhanced:     {enhanced_path}")
+    print(f"Sample rate:  {clean_sr} Hz")
+    print(f"Samples:      {len(clean)}")
+    print(f"Duration:     {len(clean) / clean_sr:.3f} s")
 
     print("\nCalculating metrics...")
 
-    noisy_snr = calculate_snr(clean, noisy)
-    enhanced_snr = calculate_snr(clean, enhanced)
+    noisy_snr = calculate_snr(
+        clean,
+        noisy,
+    )
 
-    noisy_si_sdr = calculate_si_sdr(clean, noisy)
-    enhanced_si_sdr = calculate_si_sdr(clean, enhanced)
+    enhanced_snr = calculate_snr(
+        clean,
+        enhanced,
+    )
 
-    noisy_stoi = calculate_stoi(clean, noisy, clean_sr)
-    enhanced_stoi = calculate_stoi(clean, enhanced, clean_sr)
+    noisy_si_sdr = calculate_si_sdr(
+        clean,
+        noisy,
+    )
+
+    enhanced_si_sdr = calculate_si_sdr(
+        clean,
+        enhanced,
+    )
+
+    noisy_stoi = calculate_stoi(
+        clean,
+        noisy,
+        clean_sr,
+    )
+
+    enhanced_stoi = calculate_stoi(
+        clean,
+        enhanced,
+        clean_sr,
+    )
 
     noisy_pesq = calculate_pesq(
         clean,
@@ -230,14 +308,15 @@ def main():
     )
 
     print_results(
-        noisy_snr,
-        enhanced_snr,
-        noisy_si_sdr,
-        enhanced_si_sdr,
-        noisy_stoi,
-        enhanced_stoi,
-        noisy_pesq,
-        enhanced_pesq,
+        model=args.model,
+        noisy_snr=noisy_snr,
+        enhanced_snr=enhanced_snr,
+        noisy_si_sdr=noisy_si_sdr,
+        enhanced_si_sdr=enhanced_si_sdr,
+        noisy_stoi=noisy_stoi,
+        enhanced_stoi=enhanced_stoi,
+        noisy_pesq=noisy_pesq,
+        enhanced_pesq=enhanced_pesq,
     )
 
 
