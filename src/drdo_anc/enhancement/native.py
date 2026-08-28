@@ -12,7 +12,7 @@ class NativeDF3Backend:
         self,
         dll_path: Path,
         model_path: Path,
-        attenuation_limit_db: float = 0.0,
+        attenuation_limit_db: float = 100.0,
     ) -> None:
         self.dll_path = Path(dll_path)
         self.model_path = Path(model_path)
@@ -43,7 +43,7 @@ class NativeDF3Backend:
 
         self._lib.df_create.argtypes = [
             ctypes.c_char_p,
-            ctypes.POINTER(ctypes.c_float),
+            ctypes.c_float,
             ctypes.c_char_p,
         ]
         self._lib.df_create.restype = ctypes.c_void_p
@@ -68,13 +68,9 @@ class NativeDF3Backend:
     def _create_state(self) -> None:
         assert self._lib is not None
 
-        attenuation_limit = ctypes.c_float(
-            self.attenuation_limit_db
-        )
-
         state = self._lib.df_create(
             str(self.model_path).encode("utf-8"),
-            ctypes.byref(attenuation_limit),
+            ctypes.c_float(self.attenuation_limit_db),
             None,
         )
 

@@ -43,6 +43,42 @@ def main():
 
         print(f"Frame length: {frame_length}")
 
+        # -----------------------------------------------------
+        # Process consecutive frames through one persistent state
+        # -----------------------------------------------------
+
+        num_frames = 5
+        rng = np.random.default_rng(0)
+        input_frames = rng.standard_normal(
+            (num_frames, frame_length),
+            dtype=np.float32,
+        )
+        output_frames = []
+
+        for frame_index in range(num_frames):
+            enhanced = backend.process_frame(
+                input_frames[frame_index]
+            )
+
+            assert enhanced.shape == (frame_length,)
+            assert np.isfinite(enhanced).all()
+
+            output_frames.append(enhanced)
+
+        output_audio = np.concatenate(output_frames)
+
+        assert output_audio.shape == (num_frames * frame_length,)
+        assert np.isfinite(output_audio).all()
+        assert not np.allclose(
+            output_audio,
+            input_frames.ravel(),
+        ), "Expected enhancement to modify the signal."
+
+        print(
+            f"Processed {num_frames} consecutive frames "
+            f"({output_audio.shape[0]} samples)."
+        )
+
         buffer = StreamingBuffer(
             frame_length
         )
