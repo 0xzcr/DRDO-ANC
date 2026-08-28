@@ -50,6 +50,61 @@ def validate_audio(clean, noisy, enhanced, sample_rates):
         )
 
 
+def format_delay_compensation(
+    delay_samples: int,
+    sample_rate: int,
+) -> str:
+    """Format the delay-compensation banner line."""
+
+    delay_ms = delay_samples / sample_rate * 1000.0
+
+    return (
+        f"Delay compensation: {delay_samples} samples "
+        f"({delay_ms:.3f} ms)"
+    )
+
+
+def apply_evaluation_delay(
+    clean: np.ndarray,
+    noisy: np.ndarray,
+    enhanced: np.ndarray,
+    delay_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Align clean, noisy, and enhanced for objective evaluation.
+
+    ``delay_samples`` is the known algorithmic delay of the enhanced
+    output relative to the clean/noisy timeline. The first
+    ``delay_samples`` enhanced samples are dropped; clean and noisy are
+    truncated to the same overlap length.
+    """
+
+    if delay_samples < 0:
+        raise ValueError(
+            f"delay_samples must be >= 0, got {delay_samples}"
+        )
+
+    overlap_length = min(
+        len(clean),
+        len(noisy),
+        len(enhanced) - delay_samples,
+    )
+
+    if overlap_length <= 0:
+        raise ValueError(
+            "No overlapping audio after applying "
+            f"delay_samples={delay_samples}."
+        )
+
+    clean_aligned = clean[:overlap_length]
+    noisy_aligned = noisy[:overlap_length]
+    enhanced_aligned = enhanced[
+        delay_samples : delay_samples + overlap_length
+    ]
+
+    return clean_aligned, noisy_aligned, enhanced_aligned
+
+
 def calculate_snr(clean, estimate):
     """Calculate SNR in dB using clean speech as reference."""
 
@@ -132,6 +187,78 @@ def calculate_pesq(clean, estimate, sample_rate):
     )
 
 
+def evaluate_pair(
+    clean: np.ndarray,
+    estimate: np.ndarray,
+    sample_rate: int,
+) -> dict[str, float]:
+    """Calculate all objective metrics for one signal pair."""
+
+    return {
+        "snr": calculate_snr(
+            clean,
+            estimate,
+        ),
+        "si_sdr": calculate_si_sdr(
+            clean,
+            estimate,
+        ),
+        "stoi": calculate_stoi(
+            clean,
+            estimate,
+            sample_rate,
+        ),
+        "pesq": calculate_pesq(
+            clean,
+            estimate,
+            sample_rate,
+        ),
+    }
+
+
+def evaluate_model(
+    clean: np.ndarray,
+    noisy: np.ndarray,
+    enhanced: np.ndarray,
+    sample_rate: int,
+    delay_samples: int = 0,
+) -> dict[str, float]:
+    """Evaluate noisy and enhanced outputs against a clean reference."""
+
+    clean_aligned, noisy_aligned, enhanced_aligned = (
+        apply_evaluation_delay(
+            clean,
+            noisy,
+            enhanced,
+            delay_samples,
+        )
+    )
+
+    noisy_metrics = evaluate_pair(
+        clean_aligned,
+        noisy_aligned,
+        sample_rate,
+    )
+    enhanced_metrics = evaluate_pair(
+        clean_aligned,
+        enhanced_aligned,
+        sample_rate,
+    )
+
+    return {
+        "delay_samples": delay_samples,
+        "overlap_samples": len(clean_aligned),
+        "noisy_snr": noisy_metrics["snr"],
+        "enhanced_snr": enhanced_metrics["snr"],
+        "noisy_si_sdr": noisy_metrics["si_sdr"],
+        "enhanced_si_sdr": enhanced_metrics["si_sdr"],
+        "noisy_stoi": noisy_metrics["stoi"],
+        "enhanced_stoi": enhanced_metrics["stoi"],
+        "noisy_pesq": noisy_metrics["pesq"],
+        "enhanced_pesq": enhanced_metrics["pesq"],
+    }
+
+
 def parse_args():
     """Parse command-line arguments."""
 
@@ -165,6 +292,17 @@ def parse_args():
         type=str,
         required=True,
         help="Model name.",
+    )
+
+    parser.add_argument(
+        "--delay-samples",
+        type=int,
+        default=0,
+        help=(
+            "Known algorithmic delay of the enhanced output in "
+            "samples. Drops the first N enhanced samples before "
+            "metric calculation."
+        ),
     )
 
     return parser.parse_args()
@@ -260,63 +398,38 @@ def main():
     print(f"Sample rate:  {clean_sr} Hz")
     print(f"Samples:      {len(clean)}")
     print(f"Duration:     {len(clean) / clean_sr:.3f} s")
+    print(
+        format_delay_compensation(
+            args.delay_samples,
+            clean_sr,
+        )
+    )
 
     print("\nCalculating metrics...")
 
-    noisy_snr = calculate_snr(
+    metrics = evaluate_model(
         clean,
         noisy,
-    )
-
-    enhanced_snr = calculate_snr(
-        clean,
-        enhanced,
-    )
-
-    noisy_si_sdr = calculate_si_sdr(
-        clean,
-        noisy,
-    )
-
-    enhanced_si_sdr = calculate_si_sdr(
-        clean,
-        enhanced,
-    )
-
-    noisy_stoi = calculate_stoi(
-        clean,
-        noisy,
-        clean_sr,
-    )
-
-    enhanced_stoi = calculate_stoi(
-        clean,
         enhanced,
         clean_sr,
+        delay_samples=args.delay_samples,
     )
 
-    noisy_pesq = calculate_pesq(
-        clean,
-        noisy,
-        clean_sr,
-    )
-
-    enhanced_pesq = calculate_pesq(
-        clean,
-        enhanced,
-        clean_sr,
+    print(
+        f"Aligned samples: {metrics['overlap_samples']} "
+        f"({metrics['overlap_samples'] / clean_sr:.3f} s)"
     )
 
     print_results(
         model=args.model,
-        noisy_snr=noisy_snr,
-        enhanced_snr=enhanced_snr,
-        noisy_si_sdr=noisy_si_sdr,
-        enhanced_si_sdr=enhanced_si_sdr,
-        noisy_stoi=noisy_stoi,
-        enhanced_stoi=enhanced_stoi,
-        noisy_pesq=noisy_pesq,
-        enhanced_pesq=enhanced_pesq,
+        noisy_snr=metrics["noisy_snr"],
+        enhanced_snr=metrics["enhanced_snr"],
+        noisy_si_sdr=metrics["noisy_si_sdr"],
+        enhanced_si_sdr=metrics["enhanced_si_sdr"],
+        noisy_stoi=metrics["noisy_stoi"],
+        enhanced_stoi=metrics["enhanced_stoi"],
+        noisy_pesq=metrics["noisy_pesq"],
+        enhanced_pesq=metrics["enhanced_pesq"],
     )
 
 

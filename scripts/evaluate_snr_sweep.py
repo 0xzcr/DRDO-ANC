@@ -1,10 +1,13 @@
+import argparse
 from pathlib import Path
 
-import numpy as np
 import soundfile as sf
-from pesq import pesq
-from pystoi import stoi
-from scipy.signal import resample_poly
+
+from evaluate import (
+    apply_evaluation_delay,
+    evaluate_pair,
+    format_delay_compensation,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,135 +42,32 @@ def load_audio(path: Path):
     return audio, sample_rate
 
 
-def validate_audio(clean, estimate, clean_sr, estimate_sr):
-    """Validate that two signals can be compared."""
+def parse_args():
+    """Parse command-line arguments."""
 
-    if clean_sr != estimate_sr:
-        raise ValueError(
-            f"Sample rates do not match: "
-            f"clean={clean_sr}, estimate={estimate_sr}"
+    parser = argparse.ArgumentParser(
+        description=(
+            "Evaluate DeepFilterNet3 across an SNR sweep."
         )
-
-    if len(clean) != len(estimate):
-        raise ValueError(
-            f"Audio lengths do not match: "
-            f"clean={len(clean)}, estimate={len(estimate)}"
-        )
-
-
-def calculate_snr(clean, estimate):
-    """Calculate SNR in dB."""
-
-    noise = estimate - clean
-
-    signal_power = np.sum(
-        clean.astype(np.float64) ** 2
     )
 
-    noise_power = np.sum(
-        noise.astype(np.float64) ** 2
-    )
-
-    return 10.0 * np.log10(
-        signal_power / (noise_power + 1e-12)
-    )
-
-
-def calculate_si_sdr(reference, estimate):
-    """Calculate scale-invariant SDR in dB."""
-
-    reference = reference.astype(np.float64)
-    estimate = estimate.astype(np.float64)
-
-    reference = reference - np.mean(reference)
-    estimate = estimate - np.mean(estimate)
-
-    reference_energy = np.sum(reference**2)
-
-    if reference_energy < 1e-12:
-        raise ValueError(
-            "Reference signal has almost no energy."
-        )
-
-    scale = (
-        np.sum(estimate * reference)
-        / reference_energy
-    )
-
-    target = scale * reference
-    noise = estimate - target
-
-    target_energy = np.sum(target**2)
-    noise_energy = np.sum(noise**2)
-
-    return 10.0 * np.log10(
-        target_energy / (noise_energy + 1e-12)
-    )
-
-
-def calculate_stoi(clean, estimate, sample_rate):
-    """Calculate STOI."""
-
-    return stoi(
-        clean,
-        estimate,
-        sample_rate,
-        extended=False,
-    )
-
-
-def calculate_pesq(clean, estimate, sample_rate):
-    """Calculate wideband PESQ at 16 kHz."""
-
-    target_sample_rate = 16_000
-
-    if sample_rate != target_sample_rate:
-        clean = resample_poly(
-            clean,
-            target_sample_rate,
-            sample_rate,
-        )
-
-        estimate = resample_poly(
-            estimate,
-            target_sample_rate,
-            sample_rate,
-        )
-
-    return pesq(
-        target_sample_rate,
-        clean,
-        estimate,
-        "wb",
-    )
-
-
-def evaluate_pair(clean, estimate, sample_rate):
-    """Calculate all objective metrics for one signal."""
-
-    return {
-        "snr": calculate_snr(
-            clean,
-            estimate,
+    parser.add_argument(
+        "--delay-samples",
+        type=int,
+        default=0,
+        help=(
+            "Known algorithmic delay of the enhanced output in "
+            "samples. Drops the first N enhanced samples before "
+            "metric calculation."
         ),
-        "si_sdr": calculate_si_sdr(
-            clean,
-            estimate,
-        ),
-        "stoi": calculate_stoi(
-            clean,
-            estimate,
-            sample_rate,
-        ),
-        "pesq": calculate_pesq(
-            clean,
-            estimate,
-            sample_rate,
-        ),
-    }
+    )
+
+    return parser.parse_args()
 
 
 def main():
+    args = parse_args()
+
     clean, clean_sr = load_audio(
         CLEAN_PATH
     )
@@ -179,6 +79,12 @@ def main():
     print(f"Clean reference: {CLEAN_PATH}")
     print(f"Sample rate:     {clean_sr} Hz")
     print(f"Duration:        {len(clean) / clean_sr:.3f} s")
+    print(
+        format_delay_compensation(
+            args.delay_samples,
+            clean_sr,
+        )
+    )
 
     results = []
 
@@ -219,29 +125,36 @@ def main():
             enhanced_path
         )
 
-        validate_audio(
-            clean,
-            noisy,
-            clean_sr,
-            noisy_sr,
-        )
+        if clean_sr != noisy_sr or clean_sr != enhanced_sr:
+            raise ValueError(
+                f"Sample rates do not match for SNR {snr_db}."
+            )
 
-        validate_audio(
-            clean,
-            enhanced,
-            clean_sr,
-            enhanced_sr,
+        if not (
+            len(clean) == len(noisy) == len(enhanced)
+        ):
+            raise ValueError(
+                f"Audio lengths do not match for SNR {snr_db}."
+            )
+
+        clean_aligned, noisy_aligned, enhanced_aligned = (
+            apply_evaluation_delay(
+                clean,
+                noisy,
+                enhanced,
+                args.delay_samples,
+            )
         )
 
         noisy_metrics = evaluate_pair(
-            clean,
-            noisy,
+            clean_aligned,
+            noisy_aligned,
             clean_sr,
         )
 
         enhanced_metrics = evaluate_pair(
-            clean,
-            enhanced,
+            clean_aligned,
+            enhanced_aligned,
             clean_sr,
         )
 
