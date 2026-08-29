@@ -7,6 +7,9 @@ name = "drdo-anc"
 version = "0.1.0"
 description = "AI/ML-enabled adaptive noise cancellation for defence communication"
 requires-python = ">=3.11"
+dependencies = [
+    "sounddevice>=0.5",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -13,7 +13,8 @@ This document describes what is **actually implemented** in the repository as of
 1. Loading a large Hugging Face audio corpus lazily from ZIP-backed manifests
 2. Building **deterministic, reproducible benchmark cases** (clean + noise + SNR)
 3. Running **DeepFilterNet3 (DF3)** in offline and native streaming modes
-4. Evaluating enhancement with shared objective metrics and streaming delay compensation
+4. **Live microphone → enhancer → speaker** streaming via a synchronous I/O pipeline
+5. Evaluating enhancement with shared objective metrics and streaming delay compensation
 
 The codebase is intentionally layered:
 
@@ -92,7 +93,12 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `io.py` | WAV load/save | DONE | `load_mono_wav`, `load_mono_wav_bytes`, `save_mono_wav` |
 | `mixing.py` | Deterministic SNR mixing | DONE | `align_noise_to_clean_length`, `scale_noise_to_snr`, `create_mixture`, `calculate_snr` |
 | `resampling.py` | Model-boundary resampling | DONE | `resample_mono` — uses `scipy.signal.resample_poly` |
-| `__init__.py` | Public audio exports | DONE | Re-exports io, mixing, resampling helpers |
+| `live/interfaces.py` | Hardware-independent live I/O ABCs | DONE | `AudioInput`, `AudioOutput` |
+| `live/fake.py` | In-memory I/O for tests | DONE | `FakeAudioInput`, `FakeAudioOutput` |
+| `live/sounddevice_backend.py` | Desktop mic/speaker backend | DONE | `SoundDeviceAudioInput`, `SoundDeviceAudioOutput`, `list_audio_devices` — via `sounddevice`/PortAudio |
+| `live/pipeline.py` | Live streaming orchestration | DONE | `StreamingPipeline` — arbitrary hardware chunks → `Enhancer.process_stream()` → output; single `flush()` on shutdown |
+| `live/__init__.py` | Public live-audio exports | DONE | |
+| `__init__.py` | Public audio exports | DONE | Re-exports io, mixing, resampling, live helpers |
 
 ### Dataset (`src/drdo_anc/dataset/`)
 
@@ -153,6 +159,8 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `test_evaluate_delay.py` | Delay compensation regression | DONE | Pins historical Freesound alignment metrics |
 | `test_streaming_backend.py` | Native backend smoke test | DONE | Frame processing, buffer, reset |
 | `test_enhancer_streaming.py` | Enhancer streaming smoke | DONE | Arbitrary chunk sizes |
+| `run_live_enhancement.py` | Live mic → enhancer → speaker CLI | DONE | `--model` (registry), `--passthrough`, `--list-devices`, `--chunk-size`, device selection |
+| `test_live_audio.py` | Live audio pipeline tests | DONE | Fake I/O only — no physical microphone required |
 | `build_evaluation_fixtures.py` | Local manifest fixtures | DONE | Builds `tests/fixtures/evaluation_manifest/` at test time |
 | `evaluate.py` | Thin evaluation CLI | DONE | Wraps `drdo_anc.evaluation` |
 | `investigate_streaming_alignment.py` | Alignment investigation (read-only) | DONE | Offset sweep; not part of CI |
@@ -397,6 +405,76 @@ Evaluation:              same rate as model output / resampled reference
 **Resampling location:** `src/drdo_anc/benchmark/manifest_benchmark.py` → `resample_mixture_for_enhancer()` → `src/drdo_anc/audio/resampling.py` → `resample_mono()`.
 
 `ZipManifestDataset.load_audio()` must **not** resample. PESQ inside `evaluation/metrics.py` may resample to 16 kHz internally for wideband PESQ only.
+
+---
+
+## 8A. Live Audio I/O
+
+Synchronous live-audio path for real-time enhancement (no dataset/manifest/evaluation layers involved).
+
+```text
+SoundDeviceAudioInput.read(chunk_size)
+    ↓ arbitrary hardware chunk (float32 mono)
+StreamingPipeline
+    ↓ torch tensor
+Enhancer.process_stream()          [or pass-through copy]
+    ↓ inside enhancer: StreamingBuffer → model frames
+SoundDeviceAudioOutput.write()
+```
+
+### Interfaces
+
+| Component | Role |
+|-----------|------|
+| `AudioInput` | `read(max_samples)` → mono float32 chunk; empty array = end-of-stream |
+| `AudioOutput` | `write(audio)` → host playback |
+| `StreamingPipeline` | Read loop, optional enhancement, single `flush()` on shutdown |
+| `FakeAudioInput` / `FakeAudioOutput` | Scripted in-memory I/O for CI |
+
+### Sample rate
+
+| Mode | Rate |
+|------|------|
+| DeepFilterNet3 enhancement | **48 kHz** (from `enhancer.sample_rate()`) |
+| Pass-through (`--passthrough`) | **48 kHz** default; override with `--sample-rate` |
+
+Input, output, and enhancer sample rates must match. Live I/O does **not** resample — resampling remains at the benchmark model boundary only.
+
+### Chunk-size behavior
+
+| Layer | Chunk size |
+|-------|------------|
+| `StreamingPipeline` | Requests `--chunk-size` samples per `read()` (default **1024**) |
+| Host / `AudioInput` | May return fewer samples; sizes are arbitrary |
+| `Enhancer.process_stream()` | Receives hardware chunks as-is |
+| `StreamingBuffer` (inside enhancer) | Converts arbitrary chunks to **480-sample** DF3 frames |
+
+Hardware chunk sizes are unrelated to model frame sizes.
+
+### Device selection
+
+- `scripts/run_live_enhancement.py --list-devices` prints PortAudio device indices.
+- `--input-device` / `--output-device` accept an integer index or host-specific name.
+- Omit both to use the host default input/output devices.
+
+### Shutdown semantics
+
+1. `StreamingPipeline.run()` calls `enhancer.reset()` once at stream start.
+2. Loop ends on empty input, `request_stop()`, or `KeyboardInterrupt` (Ctrl+C).
+3. `enhancer.flush()` is called **exactly once** in the shutdown path.
+4. Any flush output is written to `AudioOutput`, then both I/O devices are closed.
+5. Pass-through mode (`enhancer=None`) skips enhancement and flush.
+
+### Entry point
+
+```bash
+.venv\Scripts\python.exe scripts\run_live_enhancement.py --model DeepFilterNet3
+.venv\Scripts\python.exe scripts\run_live_enhancement.py --passthrough
+```
+
+**Dependency:** `sounddevice` (PortAudio) — listed in `pyproject.toml`.
+
+**Not implemented yet:** asyncio, multiprocessing, GPU/TensorRT live optimization, live evaluation metrics.
 
 ---
 
@@ -738,6 +816,12 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 | `test_streaming_backend.py` | Native frame processing, buffer, reset | PASS |
 | `test_enhancer_streaming.py` | Arbitrary chunk streaming via enhancer | PASS |
 
+### Live audio tests
+
+| Test | Purpose | Status |
+|------|---------|--------|
+| `test_live_audio.py` (6 tests) | Pass-through, arbitrary chunks, single flush, fake I/O only | PASS |
+
 ### Evaluation tests
 
 | Test | Purpose | Status |
@@ -780,6 +864,8 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 - [x] 60-case development protocol (`sih26-eval-v1`)
 - [x] Completed DF3 development benchmark JSON results
 - [x] Generic `BenchmarkRunner` for WAV-path datasets (`ListDataset`, local files)
+- [x] Live audio I/O layer (`AudioInput`/`AudioOutput`, sounddevice backend, `StreamingPipeline`)
+- [x] Live enhancement CLI (`run_live_enhancement.py`) with pass-through mode
 
 ### PARTIAL
 
@@ -834,6 +920,7 @@ These components are working infrastructure. **Extend only for concrete requirem
 | `MixtureGenerator` | Fair noisy input generation |
 | `Enhancer` interface | Model plug-in point |
 | `ModelConfig` / `enhancement.registry` | Model instantiation and streaming delay wiring |
+| `AudioInput` / `AudioOutput` / `StreamingPipeline` | Live I/O plug-in point |
 | `NativeDF3Backend` + `StreamingBuffer` | Validated streaming path |
 | `evaluation.metrics` + `evaluation.delay` | Shared metric and alignment logic |
 
@@ -863,6 +950,7 @@ These components are working infrastructure. **Extend only for concrete requirem
     - `scripts/test_df3_manifest_benchmark.py`
     - `scripts/test_streaming_backend.py`
     - `scripts/test_enhancer_streaming.py`
+    - `scripts/test_live_audio.py`
 14. Prefer small, targeted changes over broad rewrites.
 
 **Environment:** Use project virtualenv `.venv\Scripts\python.exe` on Windows — system Python may lack `libdf` / DeepFilterNet dependencies.
@@ -873,7 +961,7 @@ These components are working infrastructure. **Extend only for concrete requirem
 
 | Package / area | Owns |
 |----------------|------|
-| `src/drdo_anc/audio/` | WAV I/O, deterministic mixing, model-boundary resampling |
+| `src/drdo_anc/audio/` | WAV I/O, deterministic mixing, model-boundary resampling, live I/O (`audio/live/`) |
 | `src/drdo_anc/dataset/` | Metadata parsing, ZIP access, `SourceSample`, source pool filters |
 | `src/drdo_anc/enhancement/` | `Enhancer` ABC, model registry, and model implementations (DF3 offline + native streaming) |
 | `src/drdo_anc/benchmark/` | Cases, manifests, selection, mixtures, runners, results |
@@ -967,6 +1055,15 @@ These investigations explain **why** the architecture exists:
 | **Status** | DONE |
 | **Validation** | Full regression suite pass (2026-08-29); `test_model_registry_lists_deepfilternet3` in `test_df3_manifest_benchmark.py` |
 
+### Step 4 — Live audio I/O
+
+| | |
+|-|-|
+| **Objective** | Microphone → enhancer → speaker streaming with hardware-independent interfaces |
+| **Key implementation** | `audio/live/` (`AudioInput`, `AudioOutput`, `StreamingPipeline`, sounddevice backend, fake I/O); `scripts/run_live_enhancement.py` |
+| **Status** | DONE |
+| **Validation** | `test_live_audio.py` (6 tests, fake I/O only); full regression suite pass (2026-08-29) |
+
 ---
 
 ## LAST VERIFIED
@@ -975,8 +1072,8 @@ These investigations explain **why** the architecture exists:
 
 ## CURRENT PROJECT STATE
 
-The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 today), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for DeepFilterNet3. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`; multi-model comparison reporting and dashboard are not yet implemented.
+The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 today), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for DeepFilterNet3. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`. A **live audio I/O layer** (`StreamingPipeline` + sounddevice backend) supports real-time microphone → enhancer → speaker streaming with pass-through mode for hardware latency testing.
 
 ## NEXT RECOMMENDED ACTION
 
-**Integrate teammate fine-tuned models** — implement `Enhancer` subclasses, register with `register_model(ModelConfig(...))`, and benchmark via `run_df3_manifest_benchmark.py --model <name>` on the same `EvaluationManifest` without changing dataset, mixture, or evaluation layers.
+**Validate live streaming on target hardware** — run `run_live_enhancement.py --passthrough` to measure I/O latency, then `--model DeepFilterNet3` for end-to-end live enhancement. Integrate teammate fine-tuned models via the registry when ready.
