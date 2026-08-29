@@ -20,11 +20,12 @@ from drdo_anc.dataset.manifest import (
     SIH26_METADATA_FILENAME,
     SIH26_REPO_ID,
 )
-from drdo_anc.enhancement import DeepFilterNetEnhancer
+from drdo_anc.enhancement import create_enhancer, get_model_config, list_models
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "benchmark_results"
+DEFAULT_MODEL_NAME = "DeepFilterNet3"
 
 
 def _resolve_metadata_path(
@@ -134,8 +135,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Run the SIH-26 development manifest benchmark "
-            "with DeepFilterNet3."
+            "with a registered speech-enhancement model."
         ),
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        choices=list_models(),
+        help="Registered enhancer model name.",
     )
     parser.add_argument(
         "--metadata-path",
@@ -196,9 +203,10 @@ def main() -> None:
     args = parser.parse_args()
 
     print("=" * 70)
-    print("DRDO-ANC | DF3 Manifest Benchmark")
+    print("DRDO-ANC | Manifest Benchmark")
     print("=" * 70)
 
+    model_config = get_model_config(args.model)
     metadata_path = _resolve_metadata_path(args.metadata_path)
 
     if args.manifest_path is not None:
@@ -217,16 +225,16 @@ def main() -> None:
     )
     mixture_generator = MixtureGenerator(dataset)
 
-    enhancer = DeepFilterNetEnhancer()
-    print("\nLoading DeepFilterNet3...")
-    enhancer.load()
+    print(f"\nLoading {model_config.name}...")
+    enhancer = create_enhancer(model_config.name)
 
-    # Resampling to 48 kHz happens in ManifestBenchmarkRunner after mixture
-    # generation. ZipManifestDataset and MixtureGenerator remain at 16 kHz.
+    # Resampling to the enhancer input rate happens in
+    # ManifestBenchmarkRunner after mixture generation.
+    # ZipManifestDataset and MixtureGenerator remain at 16 kHz.
     print(
         "\nResampling boundary: MixtureGenerator (16 kHz) -> "
         f"ManifestBenchmarkRunner.resample_mixture_for_enhancer() -> "
-        f"DF3 input ({enhancer.sample_rate()} Hz)"
+        f"model input ({enhancer.sample_rate()} Hz)"
     )
     print(
         "Timing includes only model inference "
@@ -237,6 +245,7 @@ def main() -> None:
     runner = ManifestBenchmarkRunner(
         enhancer,
         mixture_generator,
+        streaming_delay_samples=model_config.streaming_delay_samples,
         modes=modes,
     )
 

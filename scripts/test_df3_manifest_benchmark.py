@@ -22,6 +22,11 @@ from drdo_anc.benchmark.manifest_benchmark import (
     validate_development_manifest,
 )
 from drdo_anc.dataset import ZipManifestDataset
+from drdo_anc.enhancement import (
+    create_enhancer,
+    get_model_config,
+    list_models,
+)
 from drdo_anc.enhancement.base import Enhancer
 
 from build_evaluation_fixtures import (
@@ -77,6 +82,16 @@ def setup_module() -> None:
     build_fixtures()
 
 
+def test_model_registry_lists_deepfilternet3() -> None:
+    assert "DeepFilterNet3" in list_models()
+
+    model_config = get_model_config("DeepFilterNet3")
+    assert model_config.streaming_delay_samples == 1440
+
+    enhancer = create_enhancer("DeepFilterNet3", load=False)
+    assert enhancer.name() == "DeepFilterNet3"
+
+
 def test_manifest_validation() -> None:
     manifest = build_development_manifest(METADATA_PATH)
     validate_development_manifest(manifest)
@@ -111,8 +126,16 @@ def test_resample_mixture_for_enhancer() -> None:
 
 
 def test_delay_compensation_configuration() -> None:
-    assert delay_samples_for_mode(BenchmarkMode.OFFLINE) == 0
-    assert delay_samples_for_mode(BenchmarkMode.STREAMING) == 1440
+    model_config = get_model_config("DeepFilterNet3")
+
+    assert delay_samples_for_mode(
+        BenchmarkMode.OFFLINE,
+        streaming_delay_samples=model_config.streaming_delay_samples,
+    ) == 0
+    assert delay_samples_for_mode(
+        BenchmarkMode.STREAMING,
+        streaming_delay_samples=model_config.streaming_delay_samples,
+    ) == 1440
 
 
 def test_offline_and_streaming_receive_identical_noisy_input() -> None:
@@ -157,6 +180,7 @@ def test_smoke_benchmark_with_mock_enhancer() -> None:
     runner = ManifestBenchmarkRunner(
         enhancer,
         generator,
+        streaming_delay_samples=1440,
         modes=(
             BenchmarkMode.OFFLINE,
             BenchmarkMode.STREAMING,
@@ -185,6 +209,7 @@ def test_streaming_flush_length_with_mock_enhancer() -> None:
     runner = ManifestBenchmarkRunner(
         enhancer,
         generator,
+        streaming_delay_samples=1440,
         modes=(BenchmarkMode.STREAMING,),
     )
 
@@ -211,6 +236,7 @@ def test_result_serialization() -> None:
     runner = ManifestBenchmarkRunner(
         enhancer,
         generator,
+        streaming_delay_samples=1440,
         modes=(BenchmarkMode.OFFLINE,),
     )
 
@@ -237,7 +263,7 @@ def test_df3_smoke_benchmark_integration() -> None:
 
     import urllib.request
 
-    from drdo_anc.enhancement import DeepFilterNetEnhancer
+    from drdo_anc.enhancement import create_enhancer, get_model_config
 
     url = (
         "https://huggingface.co/datasets/"
@@ -256,12 +282,15 @@ def test_df3_smoke_benchmark_integration() -> None:
         dataset = ZipManifestDataset(metadata_path=metadata_path)
         generator = MixtureGenerator(dataset)
 
-        enhancer = DeepFilterNetEnhancer()
-        enhancer.load()
+        model_config = get_model_config("DeepFilterNet3")
+        enhancer = create_enhancer("DeepFilterNet3")
 
         runner = ManifestBenchmarkRunner(
             enhancer,
             generator,
+            streaming_delay_samples=(
+                model_config.streaming_delay_samples
+            ),
             modes=(
                 BenchmarkMode.OFFLINE,
                 BenchmarkMode.STREAMING,
@@ -306,6 +335,7 @@ def main() -> None:
     build_fixtures()
 
     tests = [
+        test_model_registry_lists_deepfilternet3,
         test_manifest_validation,
         test_smoke_case_selection,
         test_resample_mixture_for_enhancer,

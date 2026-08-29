@@ -24,8 +24,6 @@ from .mixture import MixtureGenerator
 if TYPE_CHECKING:
     from drdo_anc.enhancement.base import Enhancer
 
-STREAMING_DELAY_SAMPLES = 1440
-
 
 @dataclass(frozen=True)
 class ManifestCaseResult:
@@ -284,6 +282,7 @@ def resample_mixture_for_enhancer(
 def delay_samples_for_mode(
     mode: BenchmarkMode,
     *,
+    streaming_delay_samples: int,
     override_delay_samples: int | None = None,
 ) -> int:
     if override_delay_samples is not None:
@@ -293,14 +292,14 @@ def delay_samples_for_mode(
         return 0
 
     if mode == BenchmarkMode.STREAMING:
-        return STREAMING_DELAY_SAMPLES
+        return streaming_delay_samples
 
     raise ValueError(f"Unsupported mode: {mode}")
 
 
 class ManifestBenchmarkRunner:
     """
-    Run DF3 evaluation over manifest-defined benchmark cases.
+    Run evaluation over manifest-defined benchmark cases with any Enhancer.
 
     Timing includes only model inference (offline ``process`` or streaming
     ``process_stream`` + ``flush``). It excludes manifest parsing, ZIP I/O,
@@ -312,6 +311,7 @@ class ManifestBenchmarkRunner:
         enhancer: "Enhancer",
         mixture_generator: MixtureGenerator,
         *,
+        streaming_delay_samples: int,
         modes: tuple[BenchmarkMode, ...] = (
             BenchmarkMode.OFFLINE,
             BenchmarkMode.STREAMING,
@@ -320,6 +320,7 @@ class ManifestBenchmarkRunner:
     ) -> None:
         self._enhancer = enhancer
         self._mixture_generator = mixture_generator
+        self._streaming_delay_samples = streaming_delay_samples
         self._modes = modes
         self._measure_timing = measure_timing
 
@@ -356,6 +357,9 @@ class ManifestBenchmarkRunner:
                             mode,
                             delay_samples_for_mode(
                                 mode,
+                                streaming_delay_samples=(
+                                    self._streaming_delay_samples
+                                ),
                                 override_delay_samples=(
                                     streaming_delay_override
                                     if mode
@@ -383,6 +387,9 @@ class ManifestBenchmarkRunner:
             for mode in self._modes:
                 delay_samples = delay_samples_for_mode(
                     mode,
+                    streaming_delay_samples=(
+                        self._streaming_delay_samples
+                    ),
                     override_delay_samples=(
                         streaming_delay_override
                         if mode == BenchmarkMode.STREAMING
