@@ -42,3 +42,5 @@ zip/
 *.tar.lzo
 *.tar.lrz
 *.tar.lzo
+
+data/benchmark_results/

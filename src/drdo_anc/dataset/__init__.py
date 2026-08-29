@@ -1,3 +1,17 @@
+from .source_pool import (
+    DEVELOPMENT_NOISE_CATEGORIES,
+    DEVELOPMENT_NUM_CLEAN_SPEAKERS,
+    DEVELOPMENT_SNR_LEVELS_DB,
+    NOISE_CATEGORY_SOURCES,
+    RULES_VERSION,
+    SELECTION_SEED,
+    SPLIT_NAME,
+    derive_mixing_seed,
+    english_speaker_id,
+    is_clean_source,
+    is_noise_source,
+    is_ms_snsd_clean_row,
+)
 from .list_dataset import ListDataset
 from .manifest import (
     METADATA_COLUMNS,
@@ -25,8 +39,20 @@ __all__ = [
     "SourceSample",
     "ZipArchiveCache",
     "ZipManifestDataset",
+    "derive_mixing_seed",
+    "english_speaker_id",
+    "is_clean_source",
+    "is_ms_snsd_clean_row",
+    "is_noise_source",
     "load_metadata_rows",
     "make_source_sample_id",
+    "NOISE_CATEGORY_SOURCES",
     "read_metadata_rows",
     "row_to_source_sample",
+    "RULES_VERSION",
+    "SELECTION_SEED",
+    "SPLIT_NAME",
+    "DEVELOPMENT_NOISE_CATEGORIES",
+    "DEVELOPMENT_NUM_CLEAN_SPEAKERS",
+    "DEVELOPMENT_SNR_LEVELS_DB",
 ]

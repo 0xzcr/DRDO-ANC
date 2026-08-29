@@ -8,6 +8,21 @@ class BenchmarkMode(Enum):
     STREAMING = "streaming"
 
 
+STREAMING_CHUNK_SIZES = (
+    300,
+    700,
+    250,
+    1000,
+    137,
+    911,
+    2048,
+    512,
+    1536,
+    800,
+    1200,
+)
+
+
 @dataclass
 class BenchmarkConfig:
     mode: BenchmarkMode

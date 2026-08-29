@@ -10,23 +10,8 @@ from drdo_anc.dataset.sample import AudioSample
 from drdo_anc.enhancement.base import Enhancer
 from drdo_anc.evaluation import evaluate_model
 
-from .config import BenchmarkConfig, BenchmarkMode
+from .config import BenchmarkConfig, BenchmarkMode, STREAMING_CHUNK_SIZES
 from .result import BenchmarkResult, SampleResult
-
-
-STREAMING_CHUNK_SIZES = (
-    300,
-    700,
-    250,
-    1000,
-    137,
-    911,
-    2048,
-    512,
-    1536,
-    800,
-    1200,
-)
 
 
 class BenchmarkRunner:
