@@ -1,17 +1,20 @@
 import argparse
 import sys
+from pathlib import Path
 
 from drdo_anc.audio.live import (
     StreamingPipeline,
     close_sounddevice_io,
+    create_live_recorder,
     format_device_listing,
     open_sounddevice_io,
 )
-from drdo_anc.enhancement import create_enhancer, list_models
+from drdo_anc.enhancement import create_enhancer, get_model_config, list_models
 
 
 DEFAULT_MODEL_NAME = "DeepFilterNet3"
 DEFAULT_READ_CHUNK_SIZE = 1024
+DEFAULT_RECORD_DIR = Path("data") / "live_recordings"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -30,6 +33,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "  AudioInput.read() returns mono float32 [T].\n"
             "  Stereo devices are opened at their native channel count;\n"
             "  capture is downmixed to mono and playback is upmixed.\n"
+            "\n"
+            "Recording:\n"
+            "  --record-dir creates a timestamped session directory with\n"
+            "  input.wav, enhanced.wav, and metadata.json. Recordings use\n"
+            "  mono float32 WAV at the live sample rate with no benchmark\n"
+            "  delay compensation applied.\n"
             "\n"
             "Sample rate:\n"
             "  Enhancement mode uses the selected model sample rate\n"
@@ -95,6 +104,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print live stream diagnostics every second.",
     )
+    parser.add_argument(
+        "--record-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Base directory for timestamped live recording sessions "
+            "(input.wav, enhanced.wav, metadata.json)."
+        ),
+    )
 
     return parser
 
@@ -121,10 +139,15 @@ def main() -> None:
         sample_rate = args.sample_rate or 48_000
         enhancer = None
         mode_label = "pass-through"
+        model_name = None
+        streaming_delay_samples = None
     else:
+        model_config = get_model_config(args.model)
         enhancer = create_enhancer(args.model)
         sample_rate = args.sample_rate or enhancer.sample_rate()
         mode_label = args.model
+        model_name = args.model
+        streaming_delay_samples = model_config.streaming_delay_samples
 
     if sample_rate <= 0:
         raise SystemExit("--sample-rate must be positive.")
@@ -142,6 +165,32 @@ def main() -> None:
     print(
         f"Output dev:  {output_device if output_device is not None else 'default'}"
     )
+
+    recorder = None
+
+    if args.record_dir is not None:
+        metadata_base = {
+            "model": model_name,
+            "mode": mode_label,
+            "input_device": input_device,
+            "output_device": output_device,
+            "chunk_size": args.chunk_size,
+        }
+
+        if streaming_delay_samples is not None:
+            metadata_base["streaming_delay_samples"] = (
+                streaming_delay_samples
+            )
+
+        recorder = create_live_recorder(
+            args.record_dir,
+            sample_rate,
+            metadata_base=metadata_base,
+        )
+        print(f"Recording input:    {recorder.paths.input_path}")
+        print(f"Recording enhanced: {recorder.paths.enhanced_path}")
+        print(f"Recording metadata: {recorder.paths.metadata_path}")
+
     print("\nPress Ctrl+C to stop.")
     print("=" * 70)
 
@@ -164,12 +213,23 @@ def main() -> None:
         audio_output,
         enhancer,
         read_chunk_size=args.chunk_size,
+        recorder=recorder,
+        passthrough=args.passthrough,
     )
 
     try:
         pipeline.run(diagnose=args.diagnose_audio)
     finally:
         close_sounddevice_io(audio_input, audio_output)
+
+    if recorder is not None:
+        if recorder.dropped_chunks > 0:
+            print(
+                f"\nWARNING: dropped {recorder.dropped_chunks} "
+                "recording chunk(s) because the writer queue was full."
+            )
+
+        print(f"\nSaved recording session: {recorder.paths.session_dir}")
 
     print("\nStream finished.")
 

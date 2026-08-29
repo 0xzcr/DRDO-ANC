@@ -96,7 +96,10 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `live/interfaces.py` | Hardware-independent live I/O ABCs | DONE | `AudioInput`, `AudioOutput` |
 | `live/fake.py` | In-memory I/O for tests | DONE | `FakeAudioInput`, `FakeAudioOutput` |
 | `live/sounddevice_backend.py` | Desktop mic/speaker backend | DONE | Duplex `sd.Stream` via `open_sounddevice_io()`; stereo downmix/upmix; `SoundDeviceStreamStats` |
-| `live/pipeline.py` | Live streaming orchestration | DONE | `StreamingPipeline` — arbitrary hardware chunks → `Enhancer.process_stream()` → output; single `flush()` on shutdown |
+| `live/alignment.py` | Recording length lifecycle tracking | DONE | `RecordingLengthTracker` — stable leading-gap detection for post-flush alignment |
+| `live/recorder.py` | Live session recording | DONE | `LiveStreamRecorder`, `align_recorded_streams`, `LiveInstrumentation`, async WAV writer with bounded queue |
+| `live/session_analysis.py` | Offline live-session analysis | DONE | `analyze_live_session`, `find_energy_drop_windows` — delay-compensated energy-drop windows |
+| `live/pipeline.py` | Live streaming orchestration | DONE | `StreamingPipeline` — optional `recorder=`; flush tail via `note_flush_enhanced`; per-chunk instrumentation |
 | `live/__init__.py` | Public live-audio exports | DONE | |
 | `__init__.py` | Public audio exports | DONE | Re-exports io, mixing, resampling, live helpers |
 
@@ -159,8 +162,10 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `test_evaluate_delay.py` | Delay compensation regression | DONE | Pins historical Freesound alignment metrics |
 | `test_streaming_backend.py` | Native backend smoke test | DONE | Frame processing, buffer, reset |
 | `test_enhancer_streaming.py` | Enhancer streaming smoke | DONE | Arbitrary chunk sizes |
-| `run_live_enhancement.py` | Live mic → enhancer → speaker CLI | DONE | `--model`, `--passthrough`, `--diagnose-audio`, duplex I/O via `open_sounddevice_io()` |
+| `run_live_enhancement.py` | Live mic → enhancer → speaker CLI | DONE | `--model`, `--passthrough`, `--diagnose-audio`, `--record-dir`, duplex I/O |
 | `test_live_audio.py` | Live audio pipeline tests | DONE | Fake I/O only — no physical microphone required |
+| `test_live_recording.py` | Live recording tests | DONE | WAV/session/metadata validation; delayed-enhancer alignment; energy-drop analysis |
+| `analyze_live_session.py` | Offline live-session analysis CLI | DONE | Delay-compensated energy-drop window report for a session directory |
 | `test_live_passthrough.py` | Hardware passthrough diagnostics | DONE | Minimal duplex, pipeline, sine, capture-to-WAV modes |
 | `build_evaluation_fixtures.py` | Local manifest fixtures | DONE | Builds `tests/fixtures/evaluation_manifest/` at test time |
 | `evaluate.py` | Thin evaluation CLI | DONE | Wraps `drdo_anc.evaluation` |
@@ -488,6 +493,43 @@ Hardware chunk sizes are unrelated to model frame sizes.
 - `--input-device` / `--output-device` accept an integer index or host-specific name.
 - Omit both to use the host default input/output devices.
 - Prefer WASAPI devices at 48 kHz on Windows (e.g. Realtek indices on hostapi 2).
+
+### Recording
+
+Optional observability path — does not modify the real-time audio algorithm.
+
+```text
+AudioInput.read()
+    ↓
+LiveStreamRecorder.write_input()   → input.wav
+    ↓
+Enhancer.process_stream()
+    ↓
+LiveStreamRecorder.write_enhanced() → enhanced.wav
+    ↓
+AudioOutput.write()
+```
+
+| Item | Value |
+|------|-------|
+| Format | mono float32 WAV via `soundfile` |
+| Sample rate | same as live stream (e.g. 48 kHz) |
+| Delay compensation | **not applied** to WAVs — raw live signals; `streaming_delay_samples` stored in metadata for offline analysis |
+| Length guarantee | After `flush()`, `input_samples_recorded == enhanced_samples_recorded` when lifecycle proves a stable leading gap; otherwise `recording_alignment.status = mismatch` and finalize raises |
+| Session layout | `data/live_recordings/YYYY-MM-DD_HH-MM-SS/{input,enhanced}.wav + metadata.json` |
+| Disk I/O | background worker thread + bounded queue (drops counted, never blocks playback) |
+
+CLI: `--record-dir data\live_recordings`
+
+Shutdown: `enhancer.flush()` once → record enhanced tail → align lengths when proven → finalize WAVs + metadata.
+
+Offline analysis:
+
+```bash
+.venv\Scripts\python.exe scripts\analyze_live_session.py data\live_recordings\YYYY-MM-DD_HH-MM-SS
+```
+
+Uses `metadata.streaming_delay_samples` (or `--delay-samples`) with `apply_evaluation_delay` and reports windows where enhanced RMS energy drops unusually far below input.
 
 ### Diagnostics
 
@@ -995,6 +1037,7 @@ These components are working infrastructure. **Extend only for concrete requirem
     - `scripts/test_streaming_backend.py`
     - `scripts/test_enhancer_streaming.py`
     - `scripts/test_live_audio.py`
+    - `scripts/test_live_recording.py`
     - `scripts/test_live_passthrough.py` (hardware diagnostics)
 14. Prefer small, targeted changes over broad rewrites.
 
@@ -1119,11 +1162,29 @@ These investigations explain **why** the architecture exists:
 | **Status** | DONE |
 | **Validation** | `test_live_audio.py` pass; hardware duplex test 0 overflows on Realtek 15→12 @ 48 kHz |
 
+### Step 4C — Live session recording
+
+| | |
+|-|-|
+| **Objective** | Record raw live input and enhanced output for offline diagnosis |
+| **Key implementation** | `audio/live/recorder.py`; `StreamingPipeline(recorder=...)`; `--record-dir` on `run_live_enhancement.py` |
+| **Status** | DONE |
+| **Validation** | `test_live_recording.py`; hardware smoke recording on Realtek 15→12 |
+
+### Step 4D — Recording length alignment + offline session analysis
+
+| | |
+|-|-|
+| **Objective** | Guarantee equal input/enhanced recording lengths after `flush()` when lifecycle proves padding; analyze sessions offline with model delay compensation |
+| **Key implementation** | `audio/live/alignment.py`, `align_recorded_streams()` in `recorder.py`, `session_analysis.py`, `scripts/analyze_live_session.py`; `streaming_delay_samples` in recording metadata |
+| **Status** | DONE |
+| **Validation** | `test_live_recording.py` (10 tests); `analyze_live_session.py` on hardware session |
+
 ---
 
 ## LAST VERIFIED
 
-**2026-08-29**
+**2026-08-30**
 
 ## CURRENT PROJECT STATE
 

@@ -1,0 +1,23 @@
+{
+  "sample_rate": 48000,
+  "format": "mono float32 WAV",
+  "range": "[-1.0, 1.0]",
+  "input_path": "input.wav",
+  "enhanced_path": "enhanced.wav",
+  "input_samples_recorded": 1982464,
+  "enhanced_samples_recorded": 1981504,
+  "dropped_recording_chunks": 0,
+  "model": "DeepFilterNet3",
+  "mode": "DeepFilterNet3",
+  "input_device": 15,
+  "output_device": 12,
+  "chunk_size": 1024,
+  "chunk_count": 1936,
+  "input_samples": 1982464,
+  "output_samples": 1981504,
+  "processing_time_s": 16.521454100264236,
+  "elapsed_s": 42.202725800001645,
+  "duration_seconds": 41.30133333333333,
+  "realtime_ratio": 0.9786413685471407,
+  "input_overflows": 0
+}
