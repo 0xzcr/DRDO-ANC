@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import torch
 
@@ -78,15 +80,29 @@ class StreamingPipeline:
 
         self._stop_requested = True
 
-    def run(self) -> None:
+    def run(
+        self,
+        *,
+        diagnose: bool = False,
+        diagnose_interval_s: float = 1.0,
+        max_chunks: int | None = None,
+    ) -> None:
         """
         Process audio until input is exhausted or shutdown is requested.
 
         ``KeyboardInterrupt`` triggers the same graceful shutdown path.
+
+        When ``diagnose=True``, print ``SoundDeviceStreamStats`` (if
+        available on the input device) every ``diagnose_interval_s``.
+
+        When ``max_chunks`` is set, stop after that many successful reads.
         """
 
         if self._enhancer is not None:
             self._enhancer.reset()
+
+        last_report = time.perf_counter()
+        chunks_processed = 0
 
         try:
             while not self._stop_requested:
@@ -98,10 +114,54 @@ class StreamingPipeline:
                     break
 
                 self._process_chunk(chunk)
+                chunks_processed += 1
+
+                if (
+                    max_chunks is not None
+                    and chunks_processed >= max_chunks
+                ):
+                    break
+
+                if diagnose:
+                    now = time.perf_counter()
+
+                    if now - last_report >= diagnose_interval_s:
+                        self._print_diagnostics()
+                        last_report = now
         except KeyboardInterrupt:
             pass
         finally:
+            if diagnose:
+                self._print_diagnostics()
             self._shutdown()
+
+    def _print_diagnostics(self) -> None:
+        stats = getattr(self._audio_input, "stats", None)
+
+        if stats is None:
+            return
+
+        import json
+
+        payload = stats.as_dict()
+        host_input = getattr(
+            self._audio_input,
+            "host_input_channels",
+            None,
+        )
+        host_output = getattr(
+            self._audio_output,
+            "host_output_channels",
+            None,
+        )
+
+        if host_input is not None:
+            payload["host_input_channels"] = host_input
+
+        if host_output is not None:
+            payload["host_output_channels"] = host_output
+
+        print(json.dumps(payload, indent=2), flush=True)
 
     def _process_chunk(self, chunk: np.ndarray) -> None:
         if self._enhancer is None:

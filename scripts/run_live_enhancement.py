@@ -2,10 +2,10 @@ import argparse
 import sys
 
 from drdo_anc.audio.live import (
-    SoundDeviceAudioInput,
-    SoundDeviceAudioOutput,
     StreamingPipeline,
+    close_sounddevice_io,
     format_device_listing,
+    open_sounddevice_io,
 )
 from drdo_anc.enhancement import create_enhancer, list_models
 
@@ -25,30 +25,30 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Audio semantics\n"
             "-----------------\n"
+            "Representation:\n"
+            "  Host capture/playback uses float32 in [-1, 1].\n"
+            "  AudioInput.read() returns mono float32 [T].\n"
+            "  Stereo devices are opened at their native channel count;\n"
+            "  capture is downmixed to mono and playback is upmixed.\n"
+            "\n"
             "Sample rate:\n"
-            "  Enhancement mode uses the selected model's sample rate "
-            "(48 kHz for DeepFilterNet3). Input and output devices must "
-            "be opened at that rate.\n"
-            "  Pass-through mode defaults to 48 kHz unless --sample-rate "
-            "is provided.\n"
+            "  Enhancement mode uses the selected model sample rate\n"
+            "  (48 kHz for DeepFilterNet3).\n"
+            "  Pass-through defaults to 48 kHz unless --sample-rate is set.\n"
             "\n"
             "Chunk sizes:\n"
-            "  --chunk-size controls how many samples are requested per "
-            "read() call. The host may return fewer samples. Arbitrary "
-            "hardware chunks are forwarded directly to "
-            "Enhancer.process_stream(); StreamingBuffer inside the "
-            "enhancer converts them to model frames.\n"
+            "  --chunk-size is the requested read size. Hardware may return\n"
+            "  fewer samples. Chunks are forwarded directly to the enhancer.\n"
             "\n"
             "Device selection:\n"
-            "  Use --list-devices to show PortAudio device indices. Pass "
-            "an integer index or host-specific device name to "
-            "--input-device / --output-device. Omit both to use the host "
-            "default devices.\n"
+            "  Use --list-devices to show PortAudio indices and host APIs.\n"
+            "  Input and output share one duplex PortAudio stream.\n"
             "\n"
             "Shutdown:\n"
-            "  Press Ctrl+C to stop. The pipeline calls enhancer.flush() "
-            "exactly once, writes any remaining enhanced samples, then "
-            "closes the audio streams."
+            "  Ctrl+C stops the stream. Enhancement mode calls flush() once.\n"
+            "\n"
+            "Diagnostics:\n"
+            "  Use --diagnose-audio or scripts/test_live_passthrough.py."
         ),
     )
 
@@ -66,27 +66,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--passthrough",
         action="store_true",
-        help=(
-            "Copy microphone input directly to the speaker without "
-            "enhancement."
-        ),
+        help="Copy microphone input directly to the speaker.",
     )
     parser.add_argument(
         "--sample-rate",
         type=int,
         default=None,
-        help=(
-            "Audio sample rate in Hz. Defaults to the model sample rate in "
-            "enhancement mode, or 48000 in pass-through mode."
-        ),
+        help="Audio sample rate in Hz.",
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
         default=DEFAULT_READ_CHUNK_SIZE,
-        help=(
-            "Number of samples requested per AudioInput.read() call."
-        ),
+        help="Samples requested per AudioInput.read() call.",
     )
     parser.add_argument(
         "--input-device",
@@ -97,6 +89,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-device",
         default=None,
         help="Output device index or name (sounddevice/PortAudio).",
+    )
+    parser.add_argument(
+        "--diagnose-audio",
+        action="store_true",
+        help="Print live stream diagnostics every second.",
     )
 
     return parser
@@ -148,13 +145,18 @@ def main() -> None:
     print("\nPress Ctrl+C to stop.")
     print("=" * 70)
 
-    audio_input = SoundDeviceAudioInput(
+    audio_input, audio_output = open_sounddevice_io(
         sample_rate,
-        device=input_device,
+        input_device=input_device,
+        output_device=output_device,
+        blocksize=args.chunk_size,
     )
-    audio_output = SoundDeviceAudioOutput(
-        sample_rate,
-        device=output_device,
+
+    print(
+        f"Host capture channels:  {audio_input.host_input_channels}"
+    )
+    print(
+        f"Host playback channels: {audio_output.host_output_channels}"
     )
 
     pipeline = StreamingPipeline(
@@ -164,7 +166,11 @@ def main() -> None:
         read_chunk_size=args.chunk_size,
     )
 
-    pipeline.run()
+    try:
+        pipeline.run(diagnose=args.diagnose_audio)
+    finally:
+        close_sounddevice_io(audio_input, audio_output)
+
     print("\nStream finished.")
 
 

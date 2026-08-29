@@ -95,7 +95,7 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `resampling.py` | Model-boundary resampling | DONE | `resample_mono` — uses `scipy.signal.resample_poly` |
 | `live/interfaces.py` | Hardware-independent live I/O ABCs | DONE | `AudioInput`, `AudioOutput` |
 | `live/fake.py` | In-memory I/O for tests | DONE | `FakeAudioInput`, `FakeAudioOutput` |
-| `live/sounddevice_backend.py` | Desktop mic/speaker backend | DONE | `SoundDeviceAudioInput`, `SoundDeviceAudioOutput`, `list_audio_devices` — via `sounddevice`/PortAudio |
+| `live/sounddevice_backend.py` | Desktop mic/speaker backend | DONE | Duplex `sd.Stream` via `open_sounddevice_io()`; stereo downmix/upmix; `SoundDeviceStreamStats` |
 | `live/pipeline.py` | Live streaming orchestration | DONE | `StreamingPipeline` — arbitrary hardware chunks → `Enhancer.process_stream()` → output; single `flush()` on shutdown |
 | `live/__init__.py` | Public live-audio exports | DONE | |
 | `__init__.py` | Public audio exports | DONE | Re-exports io, mixing, resampling, live helpers |
@@ -159,8 +159,9 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `test_evaluate_delay.py` | Delay compensation regression | DONE | Pins historical Freesound alignment metrics |
 | `test_streaming_backend.py` | Native backend smoke test | DONE | Frame processing, buffer, reset |
 | `test_enhancer_streaming.py` | Enhancer streaming smoke | DONE | Arbitrary chunk sizes |
-| `run_live_enhancement.py` | Live mic → enhancer → speaker CLI | DONE | `--model` (registry), `--passthrough`, `--list-devices`, `--chunk-size`, device selection |
+| `run_live_enhancement.py` | Live mic → enhancer → speaker CLI | DONE | `--model`, `--passthrough`, `--diagnose-audio`, duplex I/O via `open_sounddevice_io()` |
 | `test_live_audio.py` | Live audio pipeline tests | DONE | Fake I/O only — no physical microphone required |
+| `test_live_passthrough.py` | Hardware passthrough diagnostics | DONE | Minimal duplex, pipeline, sine, capture-to-WAV modes |
 | `build_evaluation_fixtures.py` | Local manifest fixtures | DONE | Builds `tests/fixtures/evaluation_manifest/` at test time |
 | `evaluate.py` | Thin evaluation CLI | DONE | Wraps `drdo_anc.evaluation` |
 | `investigate_streaming_alignment.py` | Alignment investigation (read-only) | DONE | Offset sweep; not part of CI |
@@ -413,14 +414,44 @@ Evaluation:              same rate as model output / resampled reference
 Synchronous live-audio path for real-time enhancement (no dataset/manifest/evaluation layers involved).
 
 ```text
+open_sounddevice_io()  → shared SoundDeviceDuplexSession (one sd.Stream)
 SoundDeviceAudioInput.read(chunk_size)
-    ↓ arbitrary hardware chunk (float32 mono)
+    ↓ mono float32 [T] in [-1, 1] (stereo downmixed)
 StreamingPipeline
-    ↓ torch tensor
+    ↓ torch tensor (enhancement) or direct copy (pass-through)
 Enhancer.process_stream()          [or pass-through copy]
     ↓ inside enhancer: StreamingBuffer → model frames
 SoundDeviceAudioOutput.write()
+    ↓ mono duplicated to host output channels (typically stereo)
+PortAudio duplex playback
 ```
+
+### Audio representation at boundaries
+
+| Stage | dtype | shape | channels | sample rate | range |
+|-------|-------|-------|----------|-------------|-------|
+| PortAudio host capture | `float32` | `[T, C_in]` | native (often 2) | configured (e.g. 48 kHz) | `[-1, 1]` |
+| `AudioInput.read()` | `float32` | `[T]` | mono (downmixed) | same | `[-1, 1]` |
+| `StreamingPipeline` pass-through | `float32` | `[T]` | mono | same | unchanged |
+| `AudioOutput.write()` input | `float32` | `[T]` | mono | same | `[-1, 1]` |
+| PortAudio host playback | `float32` | `[T, C_out]` | native (often 2) | same | upmixed mono |
+
+Mono conversion: `downmix_to_mono()` averages stereo channels on capture. `upmix_mono_to_channels()` duplicates mono to both speakers on playback.
+
+### Duplex stream (passthrough fix)
+
+**Root cause of crackling (2026-08-29):** The original backend opened **separate** `InputStream` and `OutputStream`, called `start()` immediately in `__init__`, and used `channels=1` on stereo Realtek devices. The output stream underflowed before the first `write()`, and the two streams were not clock-locked.
+
+**Fix:** `open_sounddevice_io()` opens one **full-duplex** `sd.Stream` shared by input and output. The stream is started lazily on the first `read()`/`write()` so playback does not begin before audio is available. Host-native channel counts are used (stereo in/out on Realtek WASAPI); mono conversion happens at the API boundary.
+
+| API | Purpose |
+|-----|---------|
+| `SoundDeviceDuplexSession` | Shared duplex PortAudio stream + stats |
+| `open_sounddevice_io()` | Factory returning synchronized input/output pair |
+| `close_sounddevice_io()` | Clean shutdown |
+| `SoundDeviceStreamStats` | Overflow/timing diagnostics |
+
+Blocking mode: `stream.read()` / `stream.write()` on the same duplex stream (not separate callback streams).
 
 ### Interfaces
 
@@ -456,6 +487,19 @@ Hardware chunk sizes are unrelated to model frame sizes.
 - `scripts/run_live_enhancement.py --list-devices` prints PortAudio device indices.
 - `--input-device` / `--output-device` accept an integer index or host-specific name.
 - Omit both to use the host default input/output devices.
+- Prefer WASAPI devices at 48 kHz on Windows (e.g. Realtek indices on hostapi 2).
+
+### Diagnostics
+
+| Script / flag | Purpose |
+|---------------|---------|
+| `scripts/test_live_passthrough.py --mode passthrough` | Minimal duplex read/write (no pipeline) |
+| `scripts/test_live_passthrough.py --mode pipeline` | `StreamingPipeline` pass-through with stats |
+| `scripts/test_live_passthrough.py --mode sine` | 440 Hz tone → output (isolates playback) |
+| `scripts/test_live_passthrough.py --mode capture` | Mic → WAV (isolates capture) |
+| `run_live_enhancement.py --diagnose-audio` | JSON stats every second during live run |
+
+Stats include `input_overflows`, `samples_read`/`samples_written`, `realtime_ratio`, and peak levels.
 
 ### Shutdown semantics
 
@@ -951,6 +995,7 @@ These components are working infrastructure. **Extend only for concrete requirem
     - `scripts/test_streaming_backend.py`
     - `scripts/test_enhancer_streaming.py`
     - `scripts/test_live_audio.py`
+    - `scripts/test_live_passthrough.py` (hardware diagnostics)
 14. Prefer small, targeted changes over broad rewrites.
 
 **Environment:** Use project virtualenv `.venv\Scripts\python.exe` on Windows — system Python may lack `libdf` / DeepFilterNet dependencies.
@@ -1063,6 +1108,16 @@ These investigations explain **why** the architecture exists:
 | **Key implementation** | `audio/live/` (`AudioInput`, `AudioOutput`, `StreamingPipeline`, sounddevice backend, fake I/O); `scripts/run_live_enhancement.py` |
 | **Status** | DONE |
 | **Validation** | `test_live_audio.py` (6 tests, fake I/O only); full regression suite pass (2026-08-29) |
+
+### Step 4B — Live passthrough crackling fix
+
+| | |
+|-|-|
+| **Objective** | Fix unintelligible crackling on Windows Realtek passthrough |
+| **Root cause** | Separate unsynchronized Input/Output streams started before first audio; mono-on-stereo device mismatch |
+| **Key implementation** | `SoundDeviceDuplexSession`, `open_sounddevice_io()`, stereo downmix/upmix, deferred stream start, `test_live_passthrough.py` |
+| **Status** | DONE |
+| **Validation** | `test_live_audio.py` pass; hardware duplex test 0 overflows on Realtek 15→12 @ 48 kHz |
 
 ---
 

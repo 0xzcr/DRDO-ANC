@@ -4,8 +4,14 @@ from .pipeline import StreamingPipeline
 from .sounddevice_backend import (
     SoundDeviceAudioInput,
     SoundDeviceAudioOutput,
+    SoundDeviceDuplexSession,
+    SoundDeviceStreamStats,
+    close_sounddevice_io,
+    downmix_to_mono,
     format_device_listing,
     list_audio_devices,
+    open_sounddevice_io,
+    upmix_mono_to_channels,
 )
 
 __all__ = [
@@ -15,7 +21,13 @@ __all__ = [
     "FakeAudioOutput",
     "SoundDeviceAudioInput",
     "SoundDeviceAudioOutput",
+    "SoundDeviceDuplexSession",
+    "SoundDeviceStreamStats",
     "StreamingPipeline",
+    "close_sounddevice_io",
+    "downmix_to_mono",
     "format_device_listing",
     "list_audio_devices",
+    "open_sounddevice_io",
+    "upmix_mono_to_channels",
 ]
