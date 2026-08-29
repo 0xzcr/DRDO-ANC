@@ -52,18 +52,21 @@ flowchart TD
     EM["EvaluationManifest"]
     MG["MixtureGenerator\n16 kHz mixture"]
     RS["resample_mixture_for_enhancer\n48 kHz model boundary"]
+    REG["ModelConfig / registry\nstreaming_delay_samples"]
     ENH["Enhancer"]
     OFF["DeepFilterNetEnhancer.process()\noffline PyTorch"]
     STR["DeepFilterNetEnhancer.process_stream()\n+ flush()\nnative df.dll"]
     ENH --> OFF
     ENH --> STR
     OUT["enhanced audio @ 48 kHz"]
-    DELAY["apply_evaluation_delay\ndelay_samples: 0 or 1440"]
+    DELAY["apply_evaluation_delay\ndelay_samples from ModelConfig"]
     METRICS["evaluate_pair\nSNR / SI-SDR / STOI / PESQ"]
     RES["ManifestBenchmarkReport\nJSON / CSV"]
 
     HF --> META --> ZMD --> SS --> POOL --> SEL --> BC --> EM
     EM --> MG --> RS --> ENH
+    REG -.-> ENH
+    REG -.-> DELAY
     OFF --> OUT
     STR --> OUT
     OUT --> DELAY --> METRICS --> RES
@@ -74,7 +77,7 @@ flowchart TD
 | Path | Enhancement API | Backend | Evaluation `delay_samples` |
 |------|-----------------|---------|----------------------------|
 | Offline | `process()` | PyTorch `df.enhance` | `0` |
-| Streaming | `process_stream()` + `flush()` | `NativeDF3Backend` via `df.dll` | `1440` at 48 kHz |
+| Streaming | `process_stream()` + `flush()` | `NativeDF3Backend` via `df.dll` | `1440` at 48 kHz (from `ModelConfig` for DeepFilterNet3) |
 
 Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → resample → enhancer.
 
@@ -110,10 +113,11 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | File | Responsibility | Status | Important APIs / Notes |
 |------|----------------|--------|------------------------|
 | `base.py` | Model abstraction | DONE | `Enhancer` ABC |
+| `registry.py` | Model configuration registry | DONE | `ModelConfig`, `register_model`, `get_model_config`, `list_models`, `create_enhancer` — DeepFilterNet3 registered at import |
 | `deepfilternet.py` | DF3 offline + streaming wrapper | DONE | `DeepFilterNetEnhancer` — loads PyTorch + native backends |
 | `native.py` | ctypes wrapper for `df.dll` | DONE | `NativeDF3Backend` — `df_create`, `df_process_frame`, `df_free` |
 | `streaming.py` | Chunk → frame adapter | DONE | `StreamingBuffer` |
-| `__init__.py` | Exports `DeepFilterNetEnhancer` | DONE | |
+| `__init__.py` | Public enhancement exports | DONE | `Enhancer`, `DeepFilterNetEnhancer`, registry helpers |
 
 ### Evaluation (`src/drdo_anc/evaluation/`)
 
@@ -133,7 +137,7 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `mixture.py` | Mixture generation | DONE | `MixtureGenerator`, `MixtureResult` — in-memory cache |
 | `config.py` | Benchmark configuration | DONE | `BenchmarkMode`, `BenchmarkConfig`, `STREAMING_CHUNK_SIZES` |
 | `runner.py` | WAV-path benchmark runner | DONE | `BenchmarkRunner` — uses `AudioSample` + on-disk WAVs |
-| `manifest_benchmark.py` | Manifest-driven DF3 benchmark | DONE | `ManifestBenchmarkRunner`, `ManifestCaseResult`, `ManifestBenchmarkReport` |
+| `manifest_benchmark.py` | Manifest-driven enhancer benchmark | DONE | `ManifestBenchmarkRunner` (generic `Enhancer`), `ManifestCaseResult`, `ManifestBenchmarkReport` — takes `streaming_delay_samples` from model config |
 | `result.py` | Runner result types | DONE | `SampleResult`, `BenchmarkResult` |
 | `__init__.py` | Public benchmark exports | DONE | |
 
@@ -141,8 +145,8 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 
 | File | Responsibility | Status | Important APIs / Notes |
 |------|----------------|--------|------------------------|
-| `run_df3_manifest_benchmark.py` | **Primary** 60-case DF3 benchmark CLI | DONE | Smoke + full run, mandatory validation, JSON/CSV output |
-| `test_df3_manifest_benchmark.py` | Manifest benchmark tests | DONE | Mock + optional HF/DF3 integration (`SIH26_INTEGRATION=1`) |
+| `run_df3_manifest_benchmark.py` | **Primary** 60-case manifest benchmark CLI | DONE | Smoke + full run, mandatory validation, JSON/CSV output; `--model` selects registered enhancer (default: DeepFilterNet3) |
+| `test_df3_manifest_benchmark.py` | Manifest benchmark tests | DONE | Mock + registry + optional HF/DF3 integration (`SIH26_INTEGRATION=1`) |
 | `test_evaluation_manifest.py` | Manifest + mixture tests | DONE | 14 tests including distribution, SNR accuracy, determinism |
 | `test_zip_manifest_dataset.py` | Dataset adapter tests | DONE | Unit + optional `SIH26_INTEGRATION=1` |
 | `test_benchmark_runner.py` | Generic runner tests | DONE | Mock + DF3 on local Freesound WAVs |
@@ -194,7 +198,30 @@ Defined in `src/drdo_anc/enhancement/base.py`:
 ```text
 Enhancer (ABC)
    └── DeepFilterNetEnhancer
+
+ModelConfig / registry
+   └── DeepFilterNet3 (streaming_delay_samples=1440)
 ```
+
+### Model registry
+
+Implemented in `src/drdo_anc/enhancement/registry.py`:
+
+| API | Purpose |
+|-----|---------|
+| `ModelConfig` | Frozen dataclass: `name`, `streaming_delay_samples`, `factory` |
+| `register_model()` | Register a new enhancer configuration by name |
+| `get_model_config()` | Look up configuration for CLI / benchmark wiring |
+| `list_models()` | Return sorted registered model names |
+| `create_enhancer()` | Instantiate (and optionally `load()`) a registered enhancer |
+
+**Registered models (built-in):**
+
+| Name | Factory | `streaming_delay_samples` |
+|------|---------|---------------------------|
+| `DeepFilterNet3` | `DeepFilterNetEnhancer` | `1440` |
+
+Teammate fine-tuned models register via `register_model(ModelConfig(...))` before benchmark execution. Each model supplies its own streaming delay; offline delay remains `0` for all models.
 
 | Method | Purpose | Infrastructure vs model-specific |
 |--------|---------|-----------------------------------|
@@ -322,8 +349,8 @@ This is an **algorithmic alignment offset** of the native streaming DF3 output r
 
 | Mode | `delay_samples` | Where set |
 |------|-----------------|-----------|
-| Offline DF3 | `0` | `ManifestBenchmarkRunner` / `BenchmarkConfig` |
-| Streaming DF3 | `1440` | `STREAMING_DELAY_SAMPLES` in `manifest_benchmark.py` |
+| Offline | `0` | `ManifestBenchmarkRunner` / `BenchmarkConfig` |
+| Streaming | Model-specific (e.g. `1440` for DeepFilterNet3) | `ModelConfig.streaming_delay_samples` → passed to `ManifestBenchmarkRunner` as `streaming_delay_samples`; `delay_samples_for_mode()` applies it per mode |
 
 Compensation is applied in **`evaluation.delay.apply_evaluation_delay`**, not inside the streaming model. The first `delay_samples` enhanced samples are dropped; clean and noisy are truncated to the same overlap length.
 
@@ -563,13 +590,15 @@ Architecture supports larger manifests via `build_evaluation_manifest(...)` (e.g
 
 **Requires:** Input WAVs already at enhancer sample rate (48 kHz for DF3).
 
-### Manifest-based DF3 runner
+### Manifest-based runner (model-agnostic)
 
 | Component | Role |
 |-----------|------|
-| `ManifestBenchmarkRunner` | Manifest → mixture → resample → enhance → evaluate |
+| `ManifestBenchmarkRunner` | Manifest → mixture → resample → any `Enhancer` → evaluate |
 | `ManifestCaseResult` | Per-case JSON-serializable row |
 | `ManifestBenchmarkReport` | Aggregates + `save_json` / `save_csv` |
+
+**Constructor:** Requires a loaded `Enhancer` and `streaming_delay_samples` (from `ModelConfig` when using the registry). No DF3-specific logic inside the runner.
 
 **Timing (`ManifestBenchmarkRunner`):** Documented in class docstring — **model inference only** (offline `process` or streaming `process_stream` + `flush`). Excludes ZIP I/O, mixture generation, resampling, manifest parsing.
 
@@ -582,7 +611,7 @@ Architecture supports larger manifests via `build_evaluation_manifest(...)` (e.g
 | Streaming flush | **Yes** (inside timed block) |
 | Metric computation | No |
 
-**Entry point:** `scripts/run_df3_manifest_benchmark.py`
+**Entry point:** `scripts/run_df3_manifest_benchmark.py` (default model: `DeepFilterNet3`; use `--model` for other registered enhancers)
 
 ---
 
@@ -746,13 +775,16 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 - [x] `MixtureGenerator` with deterministic alignment and SNR
 - [x] Model-boundary resampling (`resample_mono`)
 - [x] `ManifestBenchmarkRunner` + `scripts/run_df3_manifest_benchmark.py`
+- [x] Model registry / generic model configuration (`enhancement/registry.py`)
+- [x] `ManifestBenchmarkRunner` decoupled from DF3 (`streaming_delay_samples` from `ModelConfig`)
 - [x] 60-case development protocol (`sih26-eval-v1`)
 - [x] Completed DF3 development benchmark JSON results
 - [x] Generic `BenchmarkRunner` for WAV-path datasets (`ListDataset`, local files)
 
 ### PARTIAL
 
-- [ ] `BenchmarkRunner` ↔ manifest pipeline integration (manifest runner is separate; no unified CLI)
+- [ ] `BenchmarkRunner` ↔ manifest pipeline integration (manifest runner is separate; no unified WAV-path bridge)
+- [ ] `run_df3_manifest_benchmark.py` multi-model comparison in one invocation (single-model via `--model` works today)
 - [ ] `AudioSample` bridge from `MixtureResult` (mixture stops at in-memory arrays)
 - [ ] Production 2,500-case manifest (architecture supports via `build_evaluation_manifest`, not default)
 - [ ] Committed pytest test suite under `tests/` (fixtures generated ad hoc)
@@ -762,8 +794,7 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 
 ### NOT DONE
 
-- [ ] Model registry / generic model configuration
-- [ ] `scripts/run_benchmark.py` unified benchmark CLI (mentioned in early design, not in repo)
+- [ ] `scripts/run_benchmark.py` unified multi-model benchmark CLI (single-model selection via `--model` exists on `run_df3_manifest_benchmark.py`)
 - [ ] Multi-model fair comparison dashboard
 - [ ] Production evaluation-set policy (100 speakers × 5 categories × 5 SNRs)
 - [ ] Fine-tuned model `Enhancer` implementations (teammate responsibility)
@@ -782,11 +813,11 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 
 Recommended engineering tasks based on **actual** repository state:
 
-1. **Integrate teammate fine-tuned models** — implement new `Enhancer` subclasses; plug into `ManifestBenchmarkRunner` without changing manifest/mixture layers.
-2. **Model registration / configuration** — lightweight registry mapping model name → `Enhancer` factory + `delay_samples` + expected sample rate (no registry exists today).
-3. **Unified multi-model benchmark CLI** — extend `run_df3_manifest_benchmark.py` or add `run_benchmark.py` to run arbitrary `Enhancer` implementations on the same `EvaluationManifest`.
-4. **Production manifest policy** — define and generate the 2,500-case manifest once protocol is approved; keep development manifest as default.
-5. **Reporting** — aggregate `ManifestBenchmarkReport` across models; optional comparison tables from existing JSON schema.
+1. **Integrate teammate fine-tuned models** — implement new `Enhancer` subclasses and register with `register_model(ModelConfig(...))`; run via `run_df3_manifest_benchmark.py --model <name>`.
+2. **Multi-model comparison reporting** — aggregate `ManifestBenchmarkReport` JSON across models; optional comparison tables.
+3. **Production manifest policy** — define and generate the 2,500-case manifest once protocol is approved; keep development manifest as default.
+4. **Unified multi-model benchmark CLI** — optional `run_benchmark.py` to run several registered models in one command.
+5. **Reporting dashboard** — visualize benchmark JSON across models (not started).
 
 ---
 
@@ -802,6 +833,7 @@ These components are working infrastructure. **Extend only for concrete requirem
 | `EvaluationManifest` | Deterministic benchmark definition |
 | `MixtureGenerator` | Fair noisy input generation |
 | `Enhancer` interface | Model plug-in point |
+| `ModelConfig` / `enhancement.registry` | Model instantiation and streaming delay wiring |
 | `NativeDF3Backend` + `StreamingBuffer` | Validated streaming path |
 | `evaluation.metrics` + `evaluation.delay` | Shared metric and alignment logic |
 
@@ -811,7 +843,7 @@ These components are working infrastructure. **Extend only for concrete requirem
 
 ## 24. Cursor / AI Development Rules
 
-1. Read `docs/PROJECT_STATUS.md` before modifying architecture.
+1. Read `PROJECT_STATUS.md` (repository root) before modifying architecture.
 2. Inspect the actual repository before claiming something is missing.
 3. Do not recreate existing abstractions.
 4. Do not modify working DF3 streaming code without a demonstrated bug.
@@ -821,7 +853,7 @@ These components are working infrastructure. **Extend only for concrete requirem
 8. Preserve deterministic benchmark behavior (manifest, mixing seeds, case IDs).
 9. Use the same benchmark cases and noisy waveforms for all models.
 10. Keep training/fine-tuning concerns separate from benchmark infrastructure.
-11. Update `docs/PROJECT_STATUS.md` after major architectural milestones.
+11. **Always update `PROJECT_STATUS.md` after architectural changes** — it is the source of truth for developers and AI sessions.
 12. Clearly distinguish DONE / PARTIAL / PLANNED / UNKNOWN.
 13. Run relevant regression tests after architectural changes:
     - `scripts/test_evaluate_delay.py`
@@ -843,7 +875,7 @@ These components are working infrastructure. **Extend only for concrete requirem
 |----------------|------|
 | `src/drdo_anc/audio/` | WAV I/O, deterministic mixing, model-boundary resampling |
 | `src/drdo_anc/dataset/` | Metadata parsing, ZIP access, `SourceSample`, source pool filters |
-| `src/drdo_anc/enhancement/` | `Enhancer` ABC and model implementations (DF3 offline + native streaming) |
+| `src/drdo_anc/enhancement/` | `Enhancer` ABC, model registry, and model implementations (DF3 offline + native streaming) |
 | `src/drdo_anc/benchmark/` | Cases, manifests, selection, mixtures, runners, results |
 | `src/drdo_anc/evaluation/` | Metrics, evaluation delay compensation |
 | `scripts/` | Thin CLIs, integration tests, investigation utilities |
@@ -926,6 +958,15 @@ These investigations explain **why** the architecture exists:
 | **Status** | DONE |
 | **Validation** | 120/120 successful; `df3_manifest_benchmark_full.json`; `test_df3_manifest_benchmark.py` |
 
+### Step 3E — Model registry and generic manifest benchmark
+
+| | |
+|-|-|
+| **Objective** | Decouple manifest benchmark from DF3; enable registered enhancers on the same `EvaluationManifest` |
+| **Key implementation** | `enhancement/registry.py` (`ModelConfig`, `create_enhancer`); `ManifestBenchmarkRunner` takes `streaming_delay_samples`; `run_df3_manifest_benchmark.py --model` |
+| **Status** | DONE |
+| **Validation** | Full regression suite pass (2026-08-29); `test_model_registry_lists_deepfilternet3` in `test_df3_manifest_benchmark.py` |
+
 ---
 
 ## LAST VERIFIED
@@ -934,8 +975,8 @@ These investigations explain **why** the architecture exists:
 
 ## CURRENT PROJECT STATE
 
-The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, 48 kHz DF3 enhancement (offline PyTorch and native streaming), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures**. Generic WAV-path benchmarking and manifest-driven benchmarking coexist; model registration and multi-model comparison are not yet implemented.
+The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 today), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for DeepFilterNet3. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`; multi-model comparison reporting and dashboard are not yet implemented.
 
 ## NEXT RECOMMENDED ACTION
 
-Add a **minimal model registry** and extend `ManifestBenchmarkRunner` (or a thin CLI wrapper) so teammate fine-tuned `Enhancer` implementations can run on the **same `EvaluationManifest`** and produce comparable JSON results — without changing dataset, mixture, or evaluation layers.
+**Integrate teammate fine-tuned models** — implement `Enhancer` subclasses, register with `register_model(ModelConfig(...))`, and benchmark via `run_df3_manifest_benchmark.py --model <name>` on the same `EvaluationManifest` without changing dataset, mixture, or evaluation layers.
