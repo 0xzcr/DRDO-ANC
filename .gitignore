@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 
+docs/
 data/generated/
 models/*.pth
 models/*.pt
@@ -16,3 +17,30 @@ models/*.onnx
 
 external/
 .venv/
+
+.DS_Store
+csv/
+*.csv
+*.txt
+*.log
+*.log.*
+*.log.*.*
+*.log.*.*.*
+*.log.*.*.*.*
+*.log.*.*.*.*.*
+*.log.*.*.*.*.*.*
+*.log.*.*.*.*.*.*.*
+*.log.*.*.*.*.*.*.*.*
+zip/
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.lzma
+*.tar.lz
+*.tar.lzo
+*.tar.lrz
+*.tar.lzo
+
+data/benchmark_results/

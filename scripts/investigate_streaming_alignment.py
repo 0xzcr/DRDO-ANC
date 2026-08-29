@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from evaluate import (
+from drdo_anc.evaluation import (
     calculate_si_sdr,
     calculate_snr,
     calculate_stoi,
