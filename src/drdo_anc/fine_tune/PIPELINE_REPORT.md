@@ -7,7 +7,8 @@ DeepFilterNet training environment.
 The pipeline performs the following sequence:
 
 1. Initializes the pinned DeepFilterNet Git submodule and creates or reuses a
-   Python 3.12 virtual environment.
+   Python 3.12 virtual environment, falling back to Python 3.11 when the WSL
+   distribution does not provide Python 3.12.
 2. Installs pinned PyTorch CUDA, audio, HDF5, scientific Python, and
    DeepFilterNet dependencies.
 3. Verifies that PyTorch can see the NVIDIA GPU.
