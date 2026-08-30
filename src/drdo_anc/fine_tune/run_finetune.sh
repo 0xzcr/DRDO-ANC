@@ -34,13 +34,26 @@ fi
 if [[ "$INSTALL_SYSTEM_DEPS" == "1" ]]; then
   command -v apt-get >/dev/null || die "This launcher requires an Ubuntu/Debian WSL distribution with apt-get."
   "${APT[@]}" update
-  if ! command -v "$PYTHON_BIN" >/dev/null && [[ "$PYTHON_BIN" == "python3.12" ]] \
-    && ! apt-cache show python3.12 >/dev/null 2>&1; then
-    echo "python3.12 is unavailable; falling back to Python 3.11."
-    PYTHON_BIN="python3.11"
+  if ! command -v "$PYTHON_BIN" >/dev/null; then
+    if apt-cache show python3.12 >/dev/null 2>&1; then
+      PYTHON_BIN="python3.12"
+    elif apt-cache show python3.11 >/dev/null 2>&1; then
+      echo "python3.12 is unavailable; falling back to Python 3.11."
+      PYTHON_BIN="python3.11"
+    elif apt-cache show python3 >/dev/null 2>&1; then
+      echo "Versioned Python packages are unavailable; using the distro Python."
+      PYTHON_BIN="python3"
+    else
+      die "No Python package is available. Check that this is Ubuntu/Debian WSL and that apt sources are configured."
+    fi
+  fi
+  if [[ "$PYTHON_BIN" == "python3" ]]; then
+    PYTHON_VENV_PACKAGE="python3-venv"
+  else
+    PYTHON_VENV_PACKAGE="$PYTHON_BIN-venv"
   fi
   "${APT[@]}" install -y \
-    "$PYTHON_BIN" "$PYTHON_BIN-venv" \
+    "$PYTHON_BIN" "$PYTHON_VENV_PACKAGE" \
     build-essential pkg-config libhdf5-dev \
     cargo rustc git ca-certificates curl
 fi

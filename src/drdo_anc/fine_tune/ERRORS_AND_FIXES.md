@@ -17,8 +17,9 @@ DeepFilterNet training stack. The upstream project documents training as Linux-
 only. The launcher therefore checks for Linux and `nvidia-smi` before it starts.
 
 If the WSL distribution does not provide a `python3.12` apt package, the
-launcher automatically falls back to Python 3.11, which is also compatible with
-the pinned DFN3 stack.
+launcher automatically falls back to Python 3.11 and then the distribution's
+generic `python3` package. If all of these are unavailable, the apt sources or
+the WSL distribution need to be repaired before continuing.
 
 ## What the launcher does
 
