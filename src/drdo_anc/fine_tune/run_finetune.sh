@@ -31,6 +31,9 @@ if [[ "$INSTALL_SYSTEM_DEPS" == "1" ]] && command -v apt-get >/dev/null; then
 fi
 
 command -v "$PYTHON_BIN" >/dev/null || die "$PYTHON_BIN was not found. Install Python 3.12 in WSL2."
+if [[ -f "$ROOT_DIR/.gitmodules" ]] && command -v git >/dev/null; then
+  git submodule update --init --recursive
+fi
 [[ -f "$DFN_ROOT/DeepFilterNet/df/train.py" ]] || die "DFN3 source not found at $DFN_ROOT."
 [[ -f "$MODEL_ARCHIVE" ]] || die "DFN3 model archive not found at $MODEL_ARCHIVE. Set MODEL_ARCHIVE to its location."
 

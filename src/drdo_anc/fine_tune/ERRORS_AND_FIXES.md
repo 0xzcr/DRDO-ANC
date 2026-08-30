@@ -35,7 +35,9 @@ only. The launcher therefore checks for Linux and `nvidia-smi` before it starts.
    size, and training workers.
 10. Starts the upstream DFN3 `train.py` using CUDA.
 
-The default fine-tuning run uses 10 epochs and batch size 32. Override them with
+The default fine-tuning run performs 10 additional epochs and uses batch size
+32. Because the pretrained checkpoint is epoch 120, the first run targets epoch
+130. Override them with
 environment variables, for example:
 
 ```bash
@@ -229,8 +231,9 @@ checkpoint is copied as `checkpoints/model_120.ckpt.best` on the first run.
 
 The WAV preparation stage reuses existing output WAV files. The fine-tuning
 stage reuses checkpoints in the run directory because upstream DFN3 resumes by
-default. Do not delete the run directory if you want to continue an interrupted
-training run.
+default. The launcher interprets `MAX_EPOCHS` as additional epochs and computes
+the target from the latest checkpoint epoch. Do not delete the run directory if
+you want to continue an interrupted training run.
 
 If the manifests or dataset contents change, use a new `RUN_DIR` and
 `DATA_DIR` to avoid mixing old HDF5 data or checkpoints with the new dataset.

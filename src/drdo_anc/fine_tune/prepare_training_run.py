@@ -1,6 +1,7 @@
 """Create a resumable DFN3 fine-tuning run from the pretrained archive."""
 
 import argparse
+import re
 import zipfile
 from pathlib import Path
 
@@ -61,11 +62,19 @@ def main():
         if not checkpoint_path.exists():
             checkpoint_path.write_bytes(source.read(checkpoint_member))
 
+    checkpoint_epochs = [
+        int(match.group(1))
+        for path in checkpoint_dir.glob("model_*.ckpt*")
+        if (match := re.search(r"model_(\d+)", path.name))
+    ]
+    start_epoch = max(checkpoint_epochs, default=0)
+
     update_config(
         config_path,
         {
             "device": args.device,
-            "max_epochs": str(args.max_epochs),
+            # DFN3 resumes from the epoch encoded in the checkpoint.
+            "max_epochs": str(start_epoch + args.max_epochs),
             "batch_size": str(args.batch_size),
             "num_workers": str(args.train_workers),
         },
@@ -74,6 +83,8 @@ def main():
     print(f"Run directory: {run_dir}")
     print(f"Config:       {config_path}")
     print(f"Checkpoint:   {checkpoint_path}")
+    print(f"Starting epoch: {start_epoch}")
+    print(f"Target epoch:   {start_epoch + args.max_epochs}")
 
 
 if __name__ == "__main__":
