@@ -23,20 +23,30 @@ INSTALL_SYSTEM_DEPS="${INSTALL_SYSTEM_DEPS:-1}"
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ "$(uname -s)" == "Linux" ]] || die "Use Windows WSL2 Ubuntu. Native Windows Git Bash is not supported by DFN3 training."
-command -v nvidia-smi >/dev/null || die "NVIDIA WSL driver not available; nvidia-smi was not found."
 
-if [[ "$INSTALL_SYSTEM_DEPS" == "1" ]] && command -v apt-get >/dev/null; then
-  sudo apt-get update
+if [[ "$EUID" -eq 0 ]]; then
+  APT=(apt-get)
+else
+  command -v sudo >/dev/null || die "sudo is required to install WSL system packages."
+  APT=(sudo apt-get)
+fi
+
+if [[ "$INSTALL_SYSTEM_DEPS" == "1" ]]; then
+  command -v apt-get >/dev/null || die "This launcher requires an Ubuntu/Debian WSL distribution with apt-get."
+  "${APT[@]}" update
   if ! command -v "$PYTHON_BIN" >/dev/null && [[ "$PYTHON_BIN" == "python3.12" ]] \
     && ! apt-cache show python3.12 >/dev/null 2>&1; then
     echo "python3.12 is unavailable; falling back to Python 3.11."
     PYTHON_BIN="python3.11"
   fi
-  sudo apt-get install -y "$PYTHON_BIN" "$PYTHON_BIN-venv" \
-    build-essential pkg-config libhdf5-dev
+  "${APT[@]}" install -y \
+    "$PYTHON_BIN" "$PYTHON_BIN-venv" \
+    build-essential pkg-config libhdf5-dev \
+    cargo rustc git ca-certificates curl
 fi
 
-command -v "$PYTHON_BIN" >/dev/null || die "$PYTHON_BIN was not found. Install Python 3.12 in WSL2."
+command -v "$PYTHON_BIN" >/dev/null || die "$PYTHON_BIN was not found after apt installation."
+command -v git >/dev/null || die "git was not found after system dependency installation."
 if [[ -f "$ROOT_DIR/.gitmodules" ]] && command -v git >/dev/null; then
   git submodule update --init --recursive
 fi
@@ -48,6 +58,10 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
 fi
 source "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip
+
+# WSL may expose nvidia-smi outside the normal PATH.
+export PATH="/usr/lib/wsl/lib:$PATH"
+command -v nvidia-smi >/dev/null || die "NVIDIA WSL driver not available; nvidia-smi was not found. Install/update the Windows NVIDIA driver."
 
 # CUDA wheels are installed from the official PyTorch CUDA index.
 python -m pip install --index-url https://download.pytorch.org/whl/cu121 \
