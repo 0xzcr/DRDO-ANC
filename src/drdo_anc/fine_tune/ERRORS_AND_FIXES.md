@@ -16,6 +16,10 @@ Native PowerShell and native Git Bash are not the target environments for the
 DeepFilterNet training stack. The upstream project documents training as Linux-
 only. The launcher therefore checks for Linux and `nvidia-smi` before it starts.
 
+If the WSL distribution does not provide a `python3.12` apt package, the
+launcher automatically falls back to Python 3.11, which is also compatible with
+the pinned DFN3 stack.
+
 ## What the launcher does
 
 `run_finetune.sh` performs the complete sequence:

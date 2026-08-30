@@ -27,7 +27,13 @@ command -v nvidia-smi >/dev/null || die "NVIDIA WSL driver not available; nvidia
 
 if [[ "$INSTALL_SYSTEM_DEPS" == "1" ]] && command -v apt-get >/dev/null; then
   sudo apt-get update
-  sudo apt-get install -y python3.12 python3.12-venv build-essential pkg-config libhdf5-dev
+  if ! command -v "$PYTHON_BIN" >/dev/null && [[ "$PYTHON_BIN" == "python3.12" ]] \
+    && ! apt-cache show python3.12 >/dev/null 2>&1; then
+    echo "python3.12 is unavailable; falling back to Python 3.11."
+    PYTHON_BIN="python3.11"
+  fi
+  sudo apt-get install -y "$PYTHON_BIN" "$PYTHON_BIN-venv" \
+    build-essential pkg-config libhdf5-dev
 fi
 
 command -v "$PYTHON_BIN" >/dev/null || die "$PYTHON_BIN was not found. Install Python 3.12 in WSL2."
