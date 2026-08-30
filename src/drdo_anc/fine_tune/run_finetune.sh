@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT_DIR"
 
 VENV_DIR="${VENV_DIR:-$ROOT_DIR/.venv-dfn3-cuda}"
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+PYTHON_BIN="${PYTHON_BIN:-python}" #changed from 3.12
 DATASET_DIR="${DATASET_DIR:-$ROOT_DIR/dataset}"
 HF_REPO_ID="${HF_REPO_ID:-Panav-Payappagoudar/sih-26-processed-audio}"
 SPLITS_DIR="${SPLITS_DIR:-$ROOT_DIR/data/mvp/splits}"
@@ -18,7 +18,7 @@ MAX_EPOCHS="${MAX_EPOCHS:-10}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 PREPARE_WORKERS="${PREPARE_WORKERS:-3}"
 TRAIN_WORKERS="${TRAIN_WORKERS:-3}"
-INSTALL_SYSTEM_DEPS="${INSTALL_SYSTEM_DEPS:-1}"
+INSTALL_SYSTEM_DEPS="${INSTALL_SYSTEM_DEPS:-0}" #change to -1 later
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
