@@ -37,6 +37,7 @@ DSP (adaptive residual filtering — standalone core)
 | **Benchmark** | Select cases, build manifests, generate mixtures, run benchmarks, store results |
 | **Enhancement** | Model abstraction (`Enhancer`) and concrete implementations (currently DF3) |
 | **Evaluation** | Delay alignment, SNR / SI-SDR / STOI / PESQ |
+| **Classification** | Rule-based noise-type analysis (`NoiseClassifier`) — isolated from live DF3 path |
 | **DSP** | Model-independent adaptive residual filtering (`NLMSFilter`) |
 
 Training and fine-tuning are **out of scope** for the benchmark infrastructure; teammates may add new `Enhancer` implementations that plug into the same benchmark path.
@@ -114,7 +115,7 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `live/replay.py` | Deterministic live session replay | DONE | `replay_wav_file`, `replay_wav_through_enhancer` — reuses `StreamingPipeline` + fake I/O |
 | `live/multimic.py` | Dual-mic reference architecture | DONE | `MultiMicConfig`, `MultiChannelAudioInput`, `ChannelRouter`, `RoutedPrimaryAudioInput`, `DualMicResidualFrame`, `analyze_channel_pair` — channel assignment is configuration, not hardcoded |
 | `live/capture_ux.py` | Shared capture terminal UX | DONE | Countdown, progress bar, completion/failure messages — shared by dual-mic and independent-mic experiment scripts |
-| `live/independent_mic.py` | Independent-device dual-mic capture | DONE | `IndependentMicConfig`, `record_independent_microphones`, `analyze_independent_pair` — parallel threads, `synchronization=independent_devices`, drift/delay reporting |
+| `live/independent_mic.py` | Independent-device dual-mic capture | DONE | `IndependentMicConfig`, `record_independent_microphones`, `analyze_independent_pair`, `prepare_independent_pair_for_analysis` — parallel threads, optional per-device sample rates (`reference_sample_rate`), `synchronization=independent_devices`, drift/delay reporting |
 | `live/sounddevice_multimic.py` | Synchronized multi-channel capture | DONE | `SoundDeviceMultiChannelInput`, `record_dual_microphone`, `FakeMultiChannelAudioInput` — one `InputStream` clock |
 | `live/pipeline.py` | Live streaming orchestration | DONE | `StreamingPipeline` — optional `recorder=`; `instrumentation=`; flush tail via `note_flush_enhanced` |
 | `live/__init__.py` | Public live-audio exports | DONE | |
@@ -161,6 +162,18 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `__init__.py` | Public DSP exports | DONE | Re-exports `NLMSFilter` |
 
 **Not a complete ANC system:** requires a suitable reference signal. Single-microphone stereo-channel investigation and DF3 integration are later stages.
+
+### Classification (`src/drdo_anc/classification/`)
+
+| File | Responsibility | Status | Important APIs / Notes |
+|------|----------------|--------|------------------------|
+| `categories.py` | Defence noise labels | DONE | `NOISE_CLASSES`, `DEFENCE_NOISE_CATEGORIES`, `UNKNOWN_CLASS` |
+| `features.py` | Deterministic feature extraction | DONE | `extract_features`, `AggregatedFeatures` — 50 ms / 25 ms framing @ 16 kHz (matches live session analysis); spectral + temporal summaries |
+| `classifier.py` | Rule-based classifier | DONE | `NoiseClassifier` — `process_chunk()`, `classify()`, `reset()`; mono only; arbitrary chunk sizes; no second mic; no ML training |
+| `evaluation.py` | Benchmark evaluation helpers | DONE | `run_classifier_benchmark`, `ClassifierBenchmarkReport` — confusion matrix, per-class metrics, timing |
+| `__init__.py` | Public classification exports | DONE | Core classifier + features only (evaluation imported by script) |
+
+**Isolated analysis module:** not wired into `StreamingPipeline`, GUI, or DF3. Uses benchmark manifest ground-truth `noise_category` and loads each case's `noise_source` clip for evaluation.
 
 ### GUI (`src/drdo_anc/gui/`)
 
@@ -216,8 +229,11 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `replay_live_session.py` | Live session replay CLI | DONE | Replay `input.wav` through any registered model via `process_stream()` + `flush()` |
 | `test_live_replay.py` | Live replay tests | DONE | Fake enhancer; arbitrary chunk sizes; determinism; metadata |
 | `test_adaptive_filter.py` | NLMS adaptive filter tests | DONE | Synthetic correlated-noise attenuation; streaming/full equivalence; stability; reset |
+| `run_noise_classifier_benchmark.py` | Noise classifier benchmark CLI | DONE | 60-case development manifest; confusion matrix + per-class metrics; JSON report |
+| `test_noise_classifier.py` | Noise classifier unit tests | DONE | Feature extraction, silence/speech/engine/drone/impulsive, chunk sizes, NaN/Inf, determinism |
 | `test_dual_microphone.py` | Dual-mic reference capture tests | DONE | Synthetic routing/analysis tests; `--capture` hardware diagnostic writes `primary.wav` / `reference.wav` / `stereo.wav` |
-| `test_independent_microphones.py` | Independent-device mic experiment | DONE | Parallel capture from two input devices; drift/delay analysis; `--capture` writes `primary.wav` / `reference.wav` / `metadata.json` |
+| `test_independent_microphones.py` | Independent-device mic experiment | DONE | Parallel capture from two input devices; drift/delay analysis; optional per-device sample rates; `--capture` writes `primary.wav` / `reference.wav` / `metadata.json` |
+| `run_usb_bluetooth_dual_mic_experiment.py` | USB-C + Bluetooth dual-mic hardware experiment (Task 6) | DONE | Reuses `independent_mic`; compatibility probe, 60 s + 5 min drift + stability captures; writes `report.txt` + metadata under `data/usb_bluetooth_dual_mic_experiment/` |
 | `test_live_passthrough.py` | Hardware passthrough diagnostics | DONE | Minimal duplex, pipeline, sine, capture-to-WAV modes |
 | `run_live_gui.py` | Real-time telemetry GUI launcher | DONE | PySide6 + QML; `--passthrough`, `--model`, `--fake`, device selection |
 | `run_live_soak.py` | Continuous live soak + JSON report | DONE | Mic → DF3 → headphones; RTF, overflows, latency estimate |
@@ -240,6 +256,7 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 |------|----------------|--------|-------|
 | `tests/fixtures/zip_manifest/` | ZipManifestDataset fixtures | DONE | Generated by `test_zip_manifest_dataset.py` if missing |
 | `tests/fixtures/evaluation_manifest/` | Manifest/mixture fixtures | DONE | Generated by `build_evaluation_fixtures.py` |
+| `data/classifier_results/` | Noise classifier benchmark JSON | DONE | Written by `run_noise_classifier_benchmark.py` |
 | `tests/` (top-level pytest suite) | — | **NOT DONE** | No committed pytest suite; tests live under `scripts/test_*.py` |
 
 ### Benchmark results (`data/benchmark_results/`)
@@ -1243,8 +1260,9 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 
 | Test | Purpose | Status |
 |------|---------|--------|
-| `test_independent_microphones.py` (10 unit tests) | Parallel independent capture, drift/sample-count difference, delay/correlation, metadata flags (`independent_devices`, `clock_locked: false`) | PASS (2026-08-31) |
+| `test_independent_microphones.py` (11 unit tests) | Parallel independent capture, drift/sample-count difference, delay/correlation, per-device sample-rate analysis, metadata flags (`independent_devices`, `clock_locked: false`) | PASS (2026-09-08) |
 | `test_independent_microphones.py --capture` | Realtek + AB13X (or other) separate input devices | MANUAL |
+| `run_usb_bluetooth_dual_mic_experiment.py` | USB-C EarPods (WASAPI 21) + Bluetooth Boult Airbass (WASAPI 19) @ 48 kHz / 16 kHz | PASS (2026-09-08) — Category C; see Step 10 |
 
 ### GUI tests
 
@@ -1280,6 +1298,7 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 - [x] NLMS adaptive residual-noise filter core (`dsp/adaptive_filter.py`) with synthetic validation tests
 - [x] Dual-microphone reference capture architecture (`audio/live/multimic.py`, `sounddevice_multimic.py`) with synthetic tests and hardware diagnostic CLI
 - [x] Independent-device microphone experiment tool (`audio/live/independent_mic.py`, `scripts/test_independent_microphones.py`) for separate Realtek/AB13X reference investigation
+- [x] USB-C + Bluetooth independent-device experiment (Task 6) — `scripts/run_usb_bluetooth_dual_mic_experiment.py`; per-device WASAPI capture; Category **C** conclusion (not recommended for NLMS without synchronized hardware)
 - [x] Real-time telemetry GUI (`src/drdo_anc/gui/`, `scripts/run_live_gui.py`) — PySide6 + QML, decoupled telemetry
 - [x] Presentation Demo Mode — WAV replay through live `StreamingPipeline` with play/pause/stop and A/B routing
 - [x] Task 1 hardening — validated demo manifest, deterministic scenarios, live soak script, A/B tests
@@ -1324,8 +1343,9 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 
 Recommended engineering tasks based on **actual** repository state:
 
-1. **Run independent-device hardware experiments** — use `scripts/test_independent_microphones.py --capture --primary-device <REALTEK> --reference-device <AB13X>` for Conditions A/B/C; compare RMS, correlation, delay, and sample-count drift in `metadata.json`.
-2. **Run synchronized dual-mic experiments** (if 2-ch ADC available) — `scripts/test_dual_microphone.py --capture` for comparison.
+1. **Do not integrate NLMS with USB-C + Bluetooth independent pair** — Task 6 measured weak/absent correlation, large unstable delay (hundreds of ms), ~80 ms/min drift, and 378 ms stability spread; recommend synchronized 2-ch hardware for future dual-mic NLMS work.
+2. **Run independent-device hardware experiments** (other pairs) — use `scripts/test_independent_microphones.py --capture --primary-device <PRIMARY> --reference-device <REFERENCE>` for Conditions A/B/C; compare RMS, correlation, delay, and sample-count drift in `metadata.json`.
+3. **Run synchronized dual-mic experiments** (if 2-ch ADC available) — `scripts/test_dual_microphone.py --capture` for comparison.
 3. **Validate reference signal quality** — decide whether the reference mic carries sufficiently correlated noise with substantially less direct speech before NLMS integration.
 
 ---
@@ -1562,7 +1582,7 @@ These investigations explain **why** the architecture exists:
 | **Objective** | Capture from two physically separate input devices (e.g. Realtek + AB13X) for reference-microphone investigation when a single 2-ch device exposes duplicate channels |
 | **Key implementation** | `audio/live/independent_mic.py`, `audio/live/capture_ux.py`; `scripts/test_independent_microphones.py` |
 | **Status** | DONE |
-| **Validation** | 10 synthetic tests; parallel thread capture; drift/delay/correlation reporting; `metadata.json` documents `synchronization=independent_devices`, `clock_locked=false`; full regression pass (2026-08-31) |
+| **Validation** | 11 synthetic tests; parallel thread capture; optional per-device sample rates; drift/delay/correlation reporting; `metadata.json` documents `synchronization=independent_devices`, `clock_locked=false`; full regression pass (2026-09-08) |
 | **Not in scope** | `StreamingPipeline` integration, NLMS, production pipeline changes |
 
 ### Step 8 — Real-Time GUI integration
@@ -1575,6 +1595,25 @@ These investigations explain **why** the architecture exists:
 | **Validation** | `test_gui_demo.py`, `test_gui_waveform.py`; full regression suite pass (2026-08-31); hardware smoke on Realtek WASAPI 15→13 |
 | **Not in scope** | NLMS, multi-mic, in-GUI device picker, session recording |
 
+### Step 10 — USB-C + Bluetooth independent-device experiment (Task 6)
+
+| | |
+|-|-|
+| **Objective** | Measure whether USB-C primary + Bluetooth reference microphones on separate host devices are stable/correlated enough for future NLMS experiments — **without** modifying the production single-mic demo or integrating NLMS |
+| **Key implementation** | Extended `IndependentMicConfig.reference_sample_rate`; `scripts/run_usb_bluetooth_dual_mic_experiment.py` reuses `record_independent_microphones` / `analyze_independent_pair` |
+| **Hardware (2026-09-08)** | Primary: WASAPI **21** — Headset (EarPods), USB-C, 48 kHz, 2 ch. Reference: WASAPI **19** — Headset (Boult Audio Airbass), Bluetooth, 16 kHz native, 1 ch |
+| **Capture** | Per-device rates (48 kHz + 16 kHz); 60 s main + 300 s drift + 2×15 s stability; 0 input overflows; no clipping |
+| **Compatibility** | Both devices open simultaneously at native WASAPI rates; **no** shared 48 kHz rate on WASAPI (DirectSound 9+10 can open both at 48 kHz with host resampling — not used for primary measurements) |
+| **Delay** | Full-recording preview (10 s @ 4 kHz analysis): −6.75 ms (main 60 s). Drift run: initial −425.5 ms → final −826.0 ms; **Δ −400.5 ms** over 5 min (**≈ −80 ms/min**) |
+| **Correlation** | Main 60 s: full −0.004, events −0.0004, background −0.004 (**essentially absent**). Drift 5 min: events mean 0.006 (**essentially absent**); strongest event window 0.067 (**weak**) |
+| **Clock drift** | Reference estimated rate 15 816 Hz vs 16 000 Hz requested over 60 s (−1.1%); primary ≈ 47 990 Hz vs 48 000 Hz |
+| **Stability** | Two 15 s reruns: initial delays −711 ms vs −333 ms (**378 ms spread**) |
+| **Conclusion** | **Category C — Poor reference.** Do not integrate NLMS with this pair. Recommend synchronized two-channel hardware for future dual-mic adaptive filtering. |
+| **Artifacts** | `data/usb_bluetooth_dual_mic_experiment/final/2026-09-08_19-13-21/` (`report.txt`, `*_metadata.json`, WAV files) |
+| **NLMS** | Not tested (by design) |
+
+---
+
 ### Step 9 — Demo & live hardening (Round-2 prep)
 
 | | |
@@ -1583,21 +1622,43 @@ These investigations explain **why** the architecture exists:
 | **Key implementation** | `demo_manifest.py`, `run_live_soak.py`, bridge scenario index properties, `DemoControls.qml` repeater |
 | **Status** | DONE |
 | **Validation** | `test_gui_demo.py` (21 tests), `test_live_audio.py`, `test_live_replay.py`; 5 min hardware soak @ WASAPI 20→18, 0 overflows |
-| **Not in scope** | NLMS, noise classifier, GUI redesign, new scenarios without source WAVs |
+| **Not in scope** | NLMS, GUI redesign, new scenarios without source WAVs — noise classifier v1 added as isolated analysis module (not live-integrated) |
+
+---
+
+### Step 11 — Noise Classifier v1 (isolated analysis module)
+
+| | |
+|-|-|
+| **Objective** | Deterministic, single-microphone noise-type analysis for defence categories without ML training or live-pipeline integration |
+| **Key implementation** | `src/drdo_anc/classification/` (`NoiseClassifier`, `extract_features`, `run_classifier_benchmark`); `scripts/run_noise_classifier_benchmark.py`; `scripts/test_noise_classifier.py` |
+| **Status** | DONE — isolated module only |
+| **Design** | Mono float32 input @ 16 kHz; 50 ms Hann-windowed frames / 25 ms hop (same convention as `session_analysis.py`); per-frame spectral centroid/bandwidth/flatness/rolloff, band-energy ratios, crest factor; aggregated impulsive/tonal/modulation indices; rule-based scores → normalized probabilities; `unknown` for silence, broadband noise, or low confidence / small top-2 margin |
+| **Categories** | `uav_drone`, `vehicle_engine`, `impulsive_firearms`, `unknown` |
+| **Validation** | 10 unit tests pass (`test_noise_classifier.py`); streaming chunk cycle reuses `STREAMING_CHUNK_SIZES`; DF3 / GUI / manifest generation / existing WAVs unchanged |
+| **Evaluation (fixture manifest, 60 cases)** | Overall accuracy **0.00**; all 60 cases predicted `unknown` — expected because `build_evaluation_fixtures.py` stores **Gaussian white-noise placeholders** per category (spectrally indistinguishable); mean inference **1.8 ms**/clip; mean RTF **0.005** |
+| **Synthetic sanity (not benchmark)** | Low-frequency harmonic stack → `vehicle_engine`; sparse high-amplitude spikes → `impulsive_firearms` |
+| **Limitations** | Rule-based v1 is **not accurate** on real defence noise without ML or tuned features; fixture benchmark does not exercise real SIH-26 ZIP clips; not integrated into live path; mixed speech+noise not evaluated; real-corpus evaluation requires HF archive download via `--archive-dir` |
+| **Reproduce** | `python scripts/test_noise_classifier.py` then `python scripts/run_noise_classifier_benchmark.py --metadata-path tests/fixtures/evaluation_manifest/metadata.csv --archive-dir tests/fixtures/evaluation_manifest` |
+| **Real corpus** | `python scripts/run_noise_classifier_benchmark.py --archive-dir <path-to-sih26-zips>` (downloads `metadata.csv` automatically if omitted) |
 
 ---
 
 ## LAST VERIFIED
 
-**2026-09-08**
+**2026-09-09**
 
 ## CURRENT PROJECT STATE
 
 The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 today), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for DeepFilterNet3. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`. A **live audio I/O layer** (`StreamingPipeline` + sounddevice backend) supports real-time microphone → enhancer → speaker streaming with pass-through mode for hardware latency testing, session recording, offline analysis, and deterministic replay of recorded inputs through any registered model. A validated **NLMS adaptive residual-noise filter** (`NLMSFilter`) exists as a standalone DSP primitive with synthetic tests. A **dual-microphone reference architecture** (`MultiMicConfig`, synchronized `SoundDeviceMultiChannelInput`, configurable `ChannelRouter`) supports future AI + NLMS experiments without modifying the existing mono DF3 live path. An **independent-device experiment tool** (`scripts/test_independent_microphones.py`) captures from two separate input devices (e.g. Realtek primary + AB13X reference) with explicit drift/delay reporting — not integrated into the production pipeline.
 
+A **USB-C + Bluetooth independent-device experiment** (Task 6, `scripts/run_usb_bluetooth_dual_mic_experiment.py`) measured EarPods (WASAPI 21 @ 48 kHz) + Boult Airbass (WASAPI 19 @ 16 kHz). Result: **Category C — poor reference** (essentially absent correlation, unstable delay, ~80 ms/min drift). **Do not integrate NLMS** with this pair; use synchronized 2-ch hardware instead.
+
 A **real-time telemetry GUI** (`src/drdo_anc/gui/`, `scripts/run_live_gui.py`) provides PySide6 + QML visualization of live passthrough and DeepFilterNet3 streaming, plus a **Demo Mode** with a **validated manifest** (`demo_manifest.py`) that replays curated local WAV assets through the same `StreamingPipeline` path for offline presentation. Demo scenario selection is **deterministic** (no random voice substitution). Demo **A / Raw** vs **B / Enhanced** routing is verified end-to-end (`ABQueuedPlaybackOutput` dequeue-time selection + controller/UI mode sync). A **live soak CLI** (`scripts/run_live_soak.py`) records continuous mic → DF3 → headphone metrics (RTF, overflows, buffering latency estimate). Status: **DONE** for Round-2 demo foundation; in-GUI device picker and GUI recording remain CLI-only.
+
+An **isolated noise classifier v1** (`src/drdo_anc/classification/`) provides deterministic rule-based analysis for `uav_drone` / `vehicle_engine` / `impulsive_firearms` / `unknown` from mono 16 kHz audio with arbitrary chunk sizes. Benchmark evaluation reuses the 60-case development manifest and loads each case's `noise_source` clip. Fixture evaluation reports **0% accuracy** (all `unknown`) because test ZIP noise is Gaussian placeholder audio — not a claim of production readiness. Not integrated into live DF3 or GUI.
 
 ## NEXT RECOMMENDED ACTION
 
 1. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B; then Live Mode with `--input-device` / `--output-device` from `run_live_soak.py --list-devices`.
-2. **Run independent-device experiments** — capture Conditions A/B/C with `python scripts/test_independent_microphones.py --capture`.
+2. **Procure synchronized 2-ch ADC for dual-mic NLMS** — Task 6 showed USB-C + Bluetooth independent devices are Category C; do not proceed with NLMS on that pair.

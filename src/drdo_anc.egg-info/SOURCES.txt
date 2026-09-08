@@ -19,6 +19,7 @@ src/drdo_anc/audio/live/independent_mic.py
 src/drdo_anc/audio/live/interfaces.py
 src/drdo_anc/audio/live/multimic.py
 src/drdo_anc/audio/live/pipeline.py
+src/drdo_anc/audio/live/playback_queue.py
 src/drdo_anc/audio/live/recorder.py
 src/drdo_anc/audio/live/replay.py
 src/drdo_anc/audio/live/session_analysis.py
@@ -33,6 +34,11 @@ src/drdo_anc/benchmark/mixture.py
 src/drdo_anc/benchmark/result.py
 src/drdo_anc/benchmark/runner.py
 src/drdo_anc/benchmark/selection.py
+src/drdo_anc/classification/__init__.py
+src/drdo_anc/classification/categories.py
+src/drdo_anc/classification/classifier.py
+src/drdo_anc/classification/evaluation.py
+src/drdo_anc/classification/features.py
 src/drdo_anc/dataset/__init__.py
 src/drdo_anc/dataset/list_dataset.py
 src/drdo_anc/dataset/manifest.py
@@ -57,6 +63,7 @@ src/drdo_anc/gui/__init__.py
 src/drdo_anc/gui/app.py
 src/drdo_anc/gui/bridge.py
 src/drdo_anc/gui/demo.py
+src/drdo_anc/gui/demo_manifest.py
 src/drdo_anc/gui/session.py
 src/drdo_anc/gui/telemetry.py
 src/drdo_anc/gui/waveform.py
