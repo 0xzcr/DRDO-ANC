@@ -14,7 +14,6 @@ Window {
     Shortcut { sequence: "A"; onActivated: guiBridge.selectAbRaw() }
     Shortcut { sequence: "B"; onActivated: guiBridge.selectAbEnhanced() }
     Shortcut { sequence: "1"; onActivated: guiBridge.selectScenario(0) }
-    Shortcut { sequence: "2"; onActivated: guiBridge.selectScenario(1) }
 
     // Deep Premium Dark Palette
     property color black: "#05070A"
@@ -107,7 +106,15 @@ Window {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: "RAW MIC INPUT"; color: white; font.pixelSize: 18; font.bold: true; font.letterSpacing: 1 }
+                        Text {
+                            text: guiBridge.operationMode === "demo"
+                                ? guiBridge.demoInputLabel
+                                : "RAW MIC INPUT"
+                            color: white
+                            font.pixelSize: 18
+                            font.bold: true
+                            font.letterSpacing: 1
+                        }
                         Item { Layout.fillWidth: true }
                         Rectangle {
                             color: "transparent"
@@ -149,7 +156,15 @@ Window {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: "CLEAN ENHANCED OUTPUT"; color: white; font.pixelSize: 18; font.bold: true; font.letterSpacing: 1 }
+                        Text {
+                            text: guiBridge.operationMode === "demo"
+                                ? guiBridge.demoOutputLabel
+                                : "CLEAN ENHANCED OUTPUT"
+                            color: white
+                            font.pixelSize: 18
+                            font.bold: true
+                            font.letterSpacing: 1
+                        }
                         Item { Layout.fillWidth: true }
                         Text {
                             text: "ENHANCED"; color: black; font.pixelSize: 10; font.bold: true; padding: 4

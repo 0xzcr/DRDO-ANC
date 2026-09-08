@@ -76,11 +76,28 @@ class GUIBridge(QObject):
     self._operation_mode = "demo"
     self._playback_state = "stopped"
     self._demo_scenario = "Speech Only"
-    self._ab_mode = "enhanced"
+    self._selected_scenario_index = 0
+    self._scenario_labels: list[str] = []
+    self._ab_mode = "raw"
     self._pipeline_stage = "input"
     self._audio_status = "Ready"
     self._development_cases = -1
     self._evaluations = -1
+    self._demo_clean_file = ""
+    self._demo_noisy_file = ""
+    self._demo_enhanced_ref_file = ""
+    self._demo_enhanced_playback = "Live DF3"
+    self._demo_input_label = "NOISY INPUT"
+    self._demo_output_label = "LIVE DF3 ENHANCED"
+    self._demo_metrics_available = False
+    self._demo_noisy_snr = 0.0
+    self._demo_enhanced_ref_snr = 0.0
+    self._demo_noisy_si_sdr = 0.0
+    self._demo_enhanced_ref_si_sdr = 0.0
+    self._demo_noisy_stoi = 0.0
+    self._demo_enhanced_ref_stoi = 0.0
+    self._demo_noisy_pesq = 0.0
+    self._demo_enhanced_ref_pesq = 0.0
 
   def start_timer(self) -> None:
     interval = int(1000 / self._fps)
@@ -149,6 +166,14 @@ class GUIBridge(QObject):
   def demoScenario(self) -> str:
     return self._demo_scenario
 
+  @Property(int, notify=demoStateChanged)
+  def selectedScenarioIndex(self) -> int:
+    return self._selected_scenario_index
+
+  @Property(list, notify=demoStateChanged)
+  def scenarioLabels(self) -> list[str]:
+    return list(self._scenario_labels)
+
   @Property(str, notify=demoStateChanged)
   def abMode(self) -> str:
     return self._ab_mode
@@ -173,6 +198,94 @@ class GUIBridge(QObject):
   def showBenchmarkSummary(self) -> bool:
     return self._development_cases > 0 and self._evaluations > 0
 
+  @Property(str, notify=demoStateChanged)
+  def demoCleanFile(self) -> str:
+    return self._demo_clean_file
+
+  @Property(str, notify=demoStateChanged)
+  def demoNoisyFile(self) -> str:
+    return self._demo_noisy_file
+
+  @Property(str, notify=demoStateChanged)
+  def demoEnhancedRefFile(self) -> str:
+    return self._demo_enhanced_ref_file
+
+  @Property(str, notify=demoStateChanged)
+  def demoEnhancedPlayback(self) -> str:
+    return self._demo_enhanced_playback
+
+  @Property(str, notify=demoStateChanged)
+  def demoInputLabel(self) -> str:
+    return self._demo_input_label
+
+  @Property(str, notify=demoStateChanged)
+  def demoOutputLabel(self) -> str:
+    return self._demo_output_label
+
+  @Property(bool, notify=demoStateChanged)
+  def showDemoMetrics(self) -> bool:
+    return self._demo_metrics_available
+
+  @Property(float, notify=demoStateChanged)
+  def demoNoisySnr(self) -> float:
+    return self._demo_noisy_snr
+
+  @Property(float, notify=demoStateChanged)
+  def demoEnhancedRefSnr(self) -> float:
+    return self._demo_enhanced_ref_snr
+
+  @Property(float, notify=demoStateChanged)
+  def demoNoisySiSdr(self) -> float:
+    return self._demo_noisy_si_sdr
+
+  @Property(float, notify=demoStateChanged)
+  def demoEnhancedRefSiSdr(self) -> float:
+    return self._demo_enhanced_ref_si_sdr
+
+  @Property(float, notify=demoStateChanged)
+  def demoNoisyStoi(self) -> float:
+    return self._demo_noisy_stoi
+
+  @Property(float, notify=demoStateChanged)
+  def demoEnhancedRefStoi(self) -> float:
+    return self._demo_enhanced_ref_stoi
+
+  @Property(float, notify=demoStateChanged)
+  def demoNoisyPesq(self) -> float:
+    return self._demo_noisy_pesq
+
+  @Property(float, notify=demoStateChanged)
+  def demoEnhancedRefPesq(self) -> float:
+    return self._demo_enhanced_ref_pesq
+
+  def set_demo_assets(
+    self,
+    *,
+    clean_file: str,
+    noisy_file: str,
+    enhanced_ref_file: str,
+    enhanced_playback: str,
+  ) -> None:
+    self._demo_clean_file = clean_file
+    self._demo_noisy_file = noisy_file
+    self._demo_enhanced_ref_file = enhanced_ref_file
+    self._demo_enhanced_playback = enhanced_playback
+    self._demo_input_label = f"NOISY INPUT ({noisy_file})"
+    self._demo_output_label = f"{enhanced_playback} OUTPUT"
+    self.demoStateChanged.emit()
+
+  def set_demo_reference_metrics(self, metrics: dict[str, float]) -> None:
+    self._demo_metrics_available = True
+    self._demo_noisy_snr = float(metrics.get("noisy_snr", 0.0))
+    self._demo_enhanced_ref_snr = float(metrics.get("enhanced_snr", 0.0))
+    self._demo_noisy_si_sdr = float(metrics.get("noisy_si_sdr", 0.0))
+    self._demo_enhanced_ref_si_sdr = float(metrics.get("enhanced_si_sdr", 0.0))
+    self._demo_noisy_stoi = float(metrics.get("noisy_stoi", 0.0))
+    self._demo_enhanced_ref_stoi = float(metrics.get("enhanced_stoi", 0.0))
+    self._demo_noisy_pesq = float(metrics.get("noisy_pesq", 0.0))
+    self._demo_enhanced_ref_pesq = float(metrics.get("enhanced_pesq", 0.0))
+    self.demoStateChanged.emit()
+
   def set_session(self, session) -> None:
     self._session = session
 
@@ -189,6 +302,14 @@ class GUIBridge(QObject):
 
   def set_demo_scenario(self, label: str) -> None:
     self._demo_scenario = label
+    self.demoStateChanged.emit()
+
+  def set_selected_scenario_index(self, index: int) -> None:
+    self._selected_scenario_index = index
+    self.demoStateChanged.emit()
+
+  def set_scenario_labels(self, labels: list[str]) -> None:
+    self._scenario_labels = list(labels)
     self.demoStateChanged.emit()
 
   def set_ab_mode(self, mode: str) -> None:

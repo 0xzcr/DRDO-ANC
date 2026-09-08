@@ -173,8 +173,10 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `qml/Main.qml` | Main telemetry console window | DONE | Waveforms, meters, sparklines, error banner |
 | `qml/Waveform.qml` | Canvas oscilloscope | DONE | Raw/enhanced waveform rendering |
 | `qml/Metrics.qml` | LED meters + metric grids | DONE | Peak/RMS, latency, buffer, drops, RTF |
-| `demo.py` | Demo mode replay controller | DONE | `ReplayAudioInput`, `DemoAudioController`, `SelectableAudioOutput` — WAV → `StreamingPipeline` |
-| `demo_scenarios.json` | Demo scenario manifest | DONE | Speech only / stationary / impulsive asset paths |
+| `demo.py` | Demo mode replay controller | DONE | `ReplayAudioInput`, `DemoAudioController`, `SelectableAudioOutput`, `DemoPipelineOutput` — WAV → `StreamingPipeline`; persisted `_ab_mode` |
+| `demo_manifest.py` | Validated demo catalog loader | DONE | `load_validated_demo_catalog()` — file/RMS/length checks; raises `DemoManifestError` |
+| `demo_scenarios.json` | Demo scenario manifest (`demo-train-v1`) | DONE | Single training triplet: train_noisy / train_clean / train_enh |
+| `playback_queue.py` | Bounded demo playback queue | DONE | `QueuedPlaybackOutput`, `ABQueuedPlaybackOutput` — decouples DF3 from PortAudio; A/B selected at dequeue time |
 | `session.py` | Demo + live session coordinator | DONE | `ApplicationSession` — mode switch, transport controls |
 | `qml/DemoControls.qml` | Demo transport + scenario UI | DONE | Play/pause/stop, A/B, mode switch, shortcuts |
 | `qml/DemoPanel.qml` | Factual demo status panel | DONE | Model, latency, RTF, benchmark summary |
@@ -218,8 +220,10 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `test_independent_microphones.py` | Independent-device mic experiment | DONE | Parallel capture from two input devices; drift/delay analysis; `--capture` writes `primary.wav` / `reference.wav` / `metadata.json` |
 | `test_live_passthrough.py` | Hardware passthrough diagnostics | DONE | Minimal duplex, pipeline, sine, capture-to-WAV modes |
 | `run_live_gui.py` | Real-time telemetry GUI launcher | DONE | PySide6 + QML; `--passthrough`, `--model`, `--fake`, device selection |
+| `run_live_soak.py` | Continuous live soak + JSON report | DONE | Mic → DF3 → headphones; RTF, overflows, latency estimate |
 | `test_gui_waveform.py` | GUI waveform downsampling tests | DONE | Empty/small/large chunk handling; no Qt or microphone required |
-| `test_gui_demo.py` | Demo mode streaming tests | DONE | Replay transport, A/B routing, `process_stream` + `flush`, determinism |
+| `run_demo_playback_timing.py` | Demo playback timing report | DONE | Write-interval stats for jitter diagnosis |
+| `test_gui_demo.py` | Demo mode streaming tests | DONE | train_* manifest, live B, playback queue, A/B sync + dequeue routing (21 tests) |
 | `build_evaluation_fixtures.py` | Local manifest fixtures | DONE | Builds `tests/fixtures/evaluation_manifest/` at test time |
 | `evaluate.py` | Thin evaluation CLI | DONE | Wraps `drdo_anc.evaluation` |
 | `investigate_streaming_alignment.py` | Alignment investigation (read-only) | DONE | Offset sweep; not part of CI |
@@ -659,19 +663,96 @@ AudioInput → Enhancer → AudioOutput
 ```bash
 .venv\Scripts\pip.exe install -e ".[gui]"
 .venv\Scripts\python.exe scripts\run_live_gui.py
-.venv\Scripts\python.exe scripts\run_live_gui.py --live-on-start --input-device 15 --output-device 13
+.venv\Scripts\python.exe scripts\run_live_gui.py --live-on-start --input-device 20 --output-device 18
 ```
 
 Default launch opens in **Demo Mode** (no microphone). Press **Play** to stream a recorded WAV through `StreamingPipeline` + DeepFilterNet3. Switch to **Live Mode** for hardware capture.
 
-Keyboard shortcuts: `Space` play/pause, `A` raw, `B` enhanced, `1`/`2`/`3` scenarios.
+Keyboard shortcuts: `Space` play/pause, `A` raw, `B` enhanced, `1`/`2` scenarios.
 
-### Demo scenarios (local assets)
+### Demo scenarios (validated manifest `demo-train-v1`)
 
-| Scenario | Input WAV | Enhanced reference (B) |
-|----------|-----------|--------------------------|
-| Speech Only | `data/train_clean_snr5.wav` | Live DF3 streaming output |
-| Speech + Stationary Noise | `data/train_noisy_snr5.wav` | `data/train_enh_snr5.wav` |
+Manifest: `src/drdo_anc/gui/demo_scenarios.json`.
+
+#### Demo Audio Set
+
+| Role | File | Verified properties (2026-09-08) |
+|------|------|--------------------------------|
+| **Clean reference** | `train_clean_snr5.wav` | `data/train_clean_snr5.wav`, 48 kHz mono, 3.0 s, RMS 0.119, peak 0.792, no clipping |
+| **Noisy input (A / pipeline)** | `train_noisy_snr5.wav` | `data/train_noisy_snr5.wav`, 48 kHz mono, 3.0 s, RMS 0.137, peak 0.777; ~5 dB SNR vs clean |
+| **Enhanced reference (offline)** | `train_enh_snr5.wav` | `data/train_enh_snr5.wav`, 48 kHz mono, 3.0 s, RMS 0.112, peak 0.754; offline DF3 batch reference (not live B playback) |
+
+**Primary scenario:** `Training Speech — SNR 5 dB`
+
+| Route | Physical playback | Waveform |
+|-------|-------------------|----------|
+| **A / Raw** | `train_noisy_snr5.wav` | Noisy input chunk |
+| **B / Enhanced** | **Live DF3** (`train_noisy_snr5.wav` → `StreamingPipeline` → DF3) | Live DF3 output chunk |
+| **Clean reference** | Not routed to A/B | Metrics/visualization only |
+| **train_enh_snr5.wav** | Not routed to B (reference only) | Offline comparison metrics in Demo panel |
+
+**Verified roles:** `train_clean` + `train_noisy` form a +5 dB SNR mixture (achieved 5.0 dB). `train_enh` improves vs clean to ~13 dB SNR offline (SI-SDR 13.0, STOI 0.85, PESQ 1.82 vs noisy STOI 0.82 / PESQ 1.11). Generation script for similar assets: `scripts/run_snr_enhancement.py` (batch `process()`); train_* files are project-local training clips, not benchmark manifest cases.
+
+**Deterministic selection:** single manifest entry; no random fallback.
+
+### A/B routing (demo)
+
+| Route | Signal | Status |
+|-------|--------|--------|
+| A (raw) | Noisy/input WAV chunk | VERIFIED — `SelectableAudioOutput` + `prepare_raw`; manual listening confirmed noisy vs clean |
+| B (enhanced) | **Live DF3** streaming output from `train_noisy_snr5.wav` | VERIFIED — `enhanced_playback: live` |
+| Switching | Does not restart pipeline or change recording | VERIFIED (`test_ab_switching_does_not_change_recording`) |
+| Dequeue-time A/B | Mode applied when chunk leaves playback queue, not when enqueued | VERIFIED — `ABQueuedPlaybackOutput` + `select_playback_chunk()` |
+| UI ↔ controller sync | Bridge `abMode` applied when pipeline is built | VERIFIED — `DemoAudioController._ab_mode`; default **raw**; manual listening confirmed |
+
+**Bug fixed (2026-09-08):** The UI could show **A / Raw** while audio played **B / Enhanced**. `ApplicationSession` set `bridge.set_ab_mode("raw")` on startup, but `DemoAudioController` rebuilt `SelectableAudioOutput` with internal default `enhanced` on each **Play** unless the user re-clicked A/B. Symptom: Raw sounded clean (live DF3) on both `noisy_snr0` and `train_noisy_snr5` demos. Fix: persist `_ab_mode` on the controller, apply it in `_build_pipeline()`, default selectable mode to `raw`, and call `demo_controller.set_ab_mode("raw")` at session init.
+
+### Demo audio output (physical playback)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Physical output supported | **YES** | `open_sounddevice_output()` via `DemoAudioController` |
+| Root cause of silent demo | **Fixed** | Demo used `FakeAudioOutput` (in-memory only); never opened a host playback stream |
+| Signal path | WAV → `ReplayAudioInput` → `StreamingPipeline` → DF3 → `SelectableAudioOutput` → `ABQueuedPlaybackOutput` → `SoundDeviceAudioOutput` → headphones |
+| Output device | CLI `--output-device` | Same flag as live mode; default host output if omitted |
+| Sample rate | 48 kHz | Matches validated demo assets and DF3 model boundary |
+| Channels | Mono in pipeline; stereo upmix at device | Same as live path |
+| Chunk size | 1024 samples/read | Configurable via `--chunk-size` |
+| A/B physical playback | VERIFIED | `enqueue_ab()` queues raw+enhanced pairs; `select_playback_chunk()` at dequeue; manual A↔B listening confirmed |
+| Play / Pause / Stop | VERIFIED | Background demo thread; GUI thread non-blocking |
+| Scenario switch | VERIFIED | `stop()` closes output stream before loading new scenario |
+| Repeated Play/Stop | VERIFIED | 3 cycles in unit tests; fresh stream per play |
+| Hardware smoke | PASS | 1 s speech clip → WASAPI output 18, peak ≈ 0.55, 48 000 samples written |
+
+### Demo playback jitter fix (Task 3, 2026-09-08)
+
+**Root cause:** triple coupling of timing — `ReplayAudioInput` slept for realtime (`time.sleep`), DF3 processing added variable latency, and `OutputStream.write()` blocked on the same thread. Delivery intervals were irregular (audible choppiness).
+
+**Fix:** producer/consumer decoupling:
+
+```text
+WAV → DF3 (processing thread, no input sleep)
+         ↓
+   ABQueuedPlaybackOutput (6 chunks ≈ 128 ms @ 1024/48 kHz)
+         ↓  select raw or enhanced at dequeue
+   dedicated consumer → SoundDeviceAudioOutput.write()
+```
+
+| Item | Measurement (WASAPI output 16, scenario 1, 12 s) |
+|------|-----------------------------------------------------|
+| Expected write interval | 21.3 ms (1024 / 48 kHz) |
+| Average interval | 21.24 ms |
+| Max interval | 45.0 ms |
+| Late writes (>1.5× expected) | 14 / 498 |
+| Queue high-water | 6 (capacity 6) |
+| Buffering added | ~128 ms max (6 × 21.3 ms) |
+
+Timing CLI: `scripts/run_demo_playback_timing.py`
+
+```bash
+# Demo with explicit headphones (restart GUI after code update)
+.venv\Scripts\python.exe scripts\run_live_gui.py --output-device 18
+```
 
 ### Integration status
 
@@ -679,7 +760,7 @@ Keyboard shortcuts: `Space` play/pause, `A` raw, `B` enhanced, `1`/`2`/`3` scena
 |---------|--------|-------|
 | Passthrough visualization | DONE | Hardware validated on Realtek WASAPI 15→13 @ 48 kHz |
 | DeepFilterNet3 visualization | DONE | Hardware smoke: 0 input overflows; RTF ≈ 0.24× on test machine |
-| **Demo Mode (WAV replay)** | **DONE** | Uses `StreamingPipeline` + `process_stream()` + `flush()`; play/pause/stop; A/B raw/enhanced |
+| **Demo Mode (WAV replay)** | **DONE** | `StreamingPipeline` + physical `SoundDeviceAudioOutput`; play/pause/stop; A/B raw/enhanced |
 | Fake/demo visuals (`--fake`) | DONE | Animated telemetry only (no pipeline) |
 | Device/model CLI selection | DONE | Live mode via CLI flags |
 | Start/stop controls in QML | DONE | Demo transport controls; live starts on mode switch |
@@ -694,6 +775,90 @@ Keyboard shortcuts: `Space` play/pause, `A` raw, `B` enhanced, `1`/`2`/`3` scena
 | DF3 pipeline (WASAPI 15→13, 30 chunks) | PASS — 0 input overflows, RTF ≈ 0.24× |
 | GUI + passthrough auto shutdown (3 s) | PASS — audio thread stopped, no lingering Python process |
 | Interactive speech intelligibility (listening test) | PARTIAL — automated smoke only; manual listening recommended before demo |
+
+### Task 1 — Demo & live hardening (2026-09-08)
+
+#### Demo
+
+| Item | Status |
+|------|--------|
+| Validated manifest (`demo_manifest.py`) | DONE |
+| Deterministic scenario selection | DONE — index-based; `scenarioLabels` / `selectedScenarioIndex` on bridge |
+| Invalid asset handling | DONE — clear `DemoManifestError`, no silent substitution |
+| A/B raw vs enhanced | VERIFIED — 21 unit tests + manual listening (2026-09-08) |
+
+#### Live audio (physical path)
+
+Path: Microphone → `AudioInput` → `StreamingPipeline` → DeepFilterNet3 → `AudioOutput` → headphones.
+
+| Item | Status | Measurement (2026-09-08, Debarshi machine) |
+|------|--------|---------------------------------------------|
+| Input device | TESTED | WASAPI index 20 — Microphone Array (Realtek), 48 kHz, 2 ch downmixed |
+| Output device | TESTED | WASAPI index 18 — Headphones (Boult Audio Airbass), 48 kHz, 2 ch |
+| Sample rate | 48 kHz | Model boundary enforced |
+| Chunk / frame size | 1024 samples/read | DF3 internal 480-sample frames preserved in enhancer |
+| Continuous runtime | TESTED | 5 min soak — `soak_2026-09-08_16-46-22.json` |
+| RTF (wall-clock) | ≈ 0.997× | 299.0 s audio in 300.0 s elapsed |
+| Processing time | 66.1 s total | ≈ 22% of wall time (inference only) |
+| Input overflows | 0 | 30 s smoke + 5 min soak |
+| Output underflows | not instrumented | PortAudio stats track input overflows only |
+| Latency estimate (buffering only) | ≈ 43 ms duplex | `2 × chunk_size / sample_rate`; excludes DF3 eval delay (1440 samples) |
+| Known issues | — | Device indices vary by machine; use `--list-devices`. Manual listening test still recommended. |
+
+Soak CLI:
+
+```bash
+.venv\Scripts\python.exe scripts\run_live_soak.py --duration-s 300 --input-device 20 --output-device 18
+```
+
+#### GUI + live simultaneous
+
+| Item | Status |
+|------|--------|
+| GUI launches with demo manifest | VERIFIED — startup validates catalog |
+| Live mode alongside GUI | ARCHITECTURE VERIFIED — separate audio thread; not re-run as 5 min combined soak in this session |
+| Telemetry during live | DONE — `publish_data` + 60 FPS GUI timer |
+| A/B in demo | VERIFIED |
+| Known issues | In-window device picker still CLI-only; combined 5 min GUI+live soak not automated |
+
+### Task 2 — Demo physical audio output (2026-09-08)
+
+| Item | Status |
+|------|--------|
+| Root cause | `DemoAudioController` sink was `FakeAudioOutput` — metrics/waveforms worked, audio discarded |
+| Fix | `open_sounddevice_output()` playback session + injectable factory for tests |
+| Tests added | `test_demo_controller_opens_output_sink_on_play`, repeated Play/Stop, A/B routing |
+
+### Task 3 — Demo jitter + audible noise (2026-09-08)
+
+| Item | Status |
+|------|--------|
+| Jitter root cause | Input sleep + DF3 + blocking `write()` on one thread |
+| Jitter fix | `QueuedPlaybackOutput` / `ABQueuedPlaybackOutput` (6-chunk bounded queue, consumer thread) |
+| Playback buffering | ~128 ms max (6 × 1024 / 48 kHz) |
+
+### Task 5 — train_* demo assets (2026-09-08)
+
+| Item | Status |
+|------|--------|
+| Demo input | `train_noisy_snr5.wav` (pipeline + A playback) |
+| Clean reference | `train_clean_snr5.wav` (metrics only, not A/B) |
+| Enhanced reference | `train_enh_snr5.wav` (offline DF3 reference, not B playback) |
+| B playback | **Live DF3** via existing `StreamingPipeline` |
+| Tests | 21 demo tests PASS |
+
+### Task 6 — Demo A/B routing fix (2026-09-08)
+
+| Item | Status |
+|------|--------|
+| Symptom | **A / Raw** sounded clean/enhanced (live DF3), including on prior `noisy_snr0` demo |
+| Root cause 1 | A/B mode chosen at **enqueue** time; queued enhanced chunks kept playing after switching to Raw |
+| Root cause 2 | Bridge showed Raw on startup but `SelectableAudioOutput` defaulted to **enhanced** on each **Play** |
+| Fix 1 | `ABQueuedPlaybackOutput` — queue `(raw, enhanced, reference)` triplets; `select_playback_chunk()` at dequeue |
+| Fix 2 | `DemoAudioController._ab_mode` persisted and applied in `_build_pipeline()`; default mode **raw** |
+| Fix 3 | `ApplicationSession` calls `demo_controller.set_ab_mode("raw")` (not bridge-only) |
+| Tests added | `test_ab_queue_selects_mode_at_playback_time`, `test_demo_controller_honors_ab_mode_on_pipeline_build` |
+| Manual validation | **PASS** — A = noisy `train_noisy_snr5`, B = live DF3; user confirmed 2026-09-08 |
 
 ---
 
@@ -1086,7 +1251,7 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 | Test | Purpose | Status |
 |------|---------|--------|
 | `test_gui_waveform.py` (4 tests) | Waveform downsampling: empty/small/large/arbitrary chunks | PASS (2026-08-31) |
-| `test_gui_demo.py` (5 tests) | Demo replay transport, A/B output, streaming path, determinism | PASS (2026-08-31) |
+| `test_gui_demo.py` (19 tests) | train_* manifest, live B playback, playback queue, A/B, determinism | PASS (2026-09-08) |
 
 ---
 
@@ -1117,6 +1282,10 @@ Tests are **script-based** (`python scripts/test_*.py`), not a committed pytest 
 - [x] Independent-device microphone experiment tool (`audio/live/independent_mic.py`, `scripts/test_independent_microphones.py`) for separate Realtek/AB13X reference investigation
 - [x] Real-time telemetry GUI (`src/drdo_anc/gui/`, `scripts/run_live_gui.py`) — PySide6 + QML, decoupled telemetry
 - [x] Presentation Demo Mode — WAV replay through live `StreamingPipeline` with play/pause/stop and A/B routing
+- [x] Task 1 hardening — validated demo manifest, deterministic scenarios, live soak script, A/B tests
+- [x] Task 2 — demo physical audio output via `open_sounddevice_output()`
+- [x] Task 3 — playback queue jitter fix
+- [x] Task 5 — authoritative `train_*` demo asset set with live DF3 B playback
 
 ### PARTIAL
 
@@ -1406,19 +1575,29 @@ These investigations explain **why** the architecture exists:
 | **Validation** | `test_gui_demo.py`, `test_gui_waveform.py`; full regression suite pass (2026-08-31); hardware smoke on Realtek WASAPI 15→13 |
 | **Not in scope** | NLMS, multi-mic, in-GUI device picker, session recording |
 
+### Step 9 — Demo & live hardening (Round-2 prep)
+
+| | |
+|-|-|
+| **Objective** | Deterministic demo manifest, reliable A/B, continuous mic → DF3 → headphones with measured RTF |
+| **Key implementation** | `demo_manifest.py`, `run_live_soak.py`, bridge scenario index properties, `DemoControls.qml` repeater |
+| **Status** | DONE |
+| **Validation** | `test_gui_demo.py` (21 tests), `test_live_audio.py`, `test_live_replay.py`; 5 min hardware soak @ WASAPI 20→18, 0 overflows |
+| **Not in scope** | NLMS, noise classifier, GUI redesign, new scenarios without source WAVs |
+
 ---
 
 ## LAST VERIFIED
 
-**2026-08-31**
+**2026-09-08**
 
 ## CURRENT PROJECT STATE
 
 The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 today), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for DeepFilterNet3. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`. A **live audio I/O layer** (`StreamingPipeline` + sounddevice backend) supports real-time microphone → enhancer → speaker streaming with pass-through mode for hardware latency testing, session recording, offline analysis, and deterministic replay of recorded inputs through any registered model. A validated **NLMS adaptive residual-noise filter** (`NLMSFilter`) exists as a standalone DSP primitive with synthetic tests. A **dual-microphone reference architecture** (`MultiMicConfig`, synchronized `SoundDeviceMultiChannelInput`, configurable `ChannelRouter`) supports future AI + NLMS experiments without modifying the existing mono DF3 live path. An **independent-device experiment tool** (`scripts/test_independent_microphones.py`) captures from two separate input devices (e.g. Realtek primary + AB13X reference) with explicit drift/delay reporting — not integrated into the production pipeline.
 
-A **real-time telemetry GUI** (`src/drdo_anc/gui/`, `scripts/run_live_gui.py`) provides PySide6 + QML visualization of live passthrough and DeepFilterNet3 streaming, plus a **Demo Mode** that replays local WAV assets through the same `StreamingPipeline` path for offline presentation (no microphone required). Status: **DONE** for first-review demo; live device picker and GUI recording remain CLI-only.
+A **real-time telemetry GUI** (`src/drdo_anc/gui/`, `scripts/run_live_gui.py`) provides PySide6 + QML visualization of live passthrough and DeepFilterNet3 streaming, plus a **Demo Mode** with a **validated manifest** (`demo_manifest.py`) that replays curated local WAV assets through the same `StreamingPipeline` path for offline presentation. Demo scenario selection is **deterministic** (no random voice substitution). Demo **A / Raw** vs **B / Enhanced** routing is verified end-to-end (`ABQueuedPlaybackOutput` dequeue-time selection + controller/UI mode sync). A **live soak CLI** (`scripts/run_live_soak.py`) records continuous mic → DF3 → headphone metrics (RTF, overflows, buffering latency estimate). Status: **DONE** for Round-2 demo foundation; in-GUI device picker and GUI recording remain CLI-only.
 
 ## NEXT RECOMMENDED ACTION
 
-1. **Rehearse the presentation** — `python scripts/run_live_gui.py`, select scenarios 1–3, press Play, toggle A/B, then switch to Live Mode only if hardware is available.
+1. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B; then Live Mode with `--input-device` / `--output-device` from `run_live_soak.py --list-devices`.
 2. **Run independent-device experiments** — capture Conditions A/B/C with `python scripts/test_independent_microphones.py --capture`.

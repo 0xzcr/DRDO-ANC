@@ -41,6 +41,84 @@ Item {
             Text { text: guiBridge.audioStatus; color: cyan; font.pixelSize: 10 }
 
             Text {
+                visible: guiBridge.operationMode === "demo" && guiBridge.demoNoisyFile.length > 0
+                text: "Noisy input"
+                color: dim
+                font.pixelSize: 10
+            }
+            Text {
+                visible: guiBridge.operationMode === "demo" && guiBridge.demoNoisyFile.length > 0
+                text: guiBridge.demoNoisyFile
+                color: white
+                font.pixelSize: 10
+            }
+
+            Text {
+                visible: guiBridge.operationMode === "demo" && guiBridge.demoCleanFile.length > 0
+                text: "Clean ref"
+                color: dim
+                font.pixelSize: 10
+            }
+            Text {
+                visible: guiBridge.operationMode === "demo" && guiBridge.demoCleanFile.length > 0
+                text: guiBridge.demoCleanFile
+                color: white
+                font.pixelSize: 10
+            }
+
+            Text {
+                visible: guiBridge.operationMode === "demo" && guiBridge.demoEnhancedRefFile.length > 0
+                text: "Enh. ref"
+                color: dim
+                font.pixelSize: 10
+            }
+            Text {
+                visible: guiBridge.operationMode === "demo" && guiBridge.demoEnhancedRefFile.length > 0
+                text: guiBridge.demoEnhancedRefFile
+                color: white
+                font.pixelSize: 10
+            }
+
+            Text {
+                visible: guiBridge.operationMode === "demo"
+                text: "B playback"
+                color: dim
+                font.pixelSize: 10
+            }
+            Text {
+                visible: guiBridge.operationMode === "demo"
+                text: guiBridge.demoEnhancedPlayback
+                color: cyan
+                font.pixelSize: 10
+            }
+
+            Text {
+                visible: guiBridge.showDemoMetrics
+                text: "Noisy SNR"
+                color: dim
+                font.pixelSize: 10
+            }
+            Text {
+                visible: guiBridge.showDemoMetrics
+                text: guiBridge.demoNoisySnr.toFixed(1) + " dB"
+                color: white
+                font.pixelSize: 10
+            }
+
+            Text {
+                visible: guiBridge.showDemoMetrics
+                text: "Ref enh SNR"
+                color: dim
+                font.pixelSize: 10
+            }
+            Text {
+                visible: guiBridge.showDemoMetrics
+                text: guiBridge.demoEnhancedRefSnr.toFixed(1) + " dB"
+                color: white
+                font.pixelSize: 10
+            }
+
+            Text {
                 visible: guiBridge.showBenchmarkSummary
                 text: "Development cases"
                 color: dim

@@ -40,15 +40,14 @@ Item {
             visible: guiBridge.operationMode === "demo"
 
             Text { text: "SCENARIO"; color: dim; font.pixelSize: 10; font.bold: true }
-            DemoButton {
-                label: "1 Speech"
-                active: guiBridge.demoScenario.indexOf("Speech Only") === 0
-                onActivated: guiBridge.selectScenario(0)
-            }
-            DemoButton {
-                label: "2 Stationary"
-                active: guiBridge.demoScenario.indexOf("Stationary") >= 0
-                onActivated: guiBridge.selectScenario(1)
+
+            Repeater {
+                model: guiBridge.scenarioLabels
+                delegate: DemoButton {
+                    label: (index + 1) + " " + modelData
+                    active: guiBridge.selectedScenarioIndex === index
+                    onActivated: guiBridge.selectScenario(index)
+                }
             }
         }
 

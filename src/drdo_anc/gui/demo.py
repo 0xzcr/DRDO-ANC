@@ -4,22 +4,59 @@ import json
 import threading
 import time
 import traceback
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 import numpy as np
 
 from drdo_anc.audio.io import load_mono_wav
 from drdo_anc.audio.live.fake import FakeAudioOutput
 from drdo_anc.audio.live.interfaces import AudioInput, AudioOutput
+from drdo_anc.audio.live.playback_queue import (
+    ABQueuedPlaybackOutput,
+    DEFAULT_MAX_CHUNKS,
+    QueuedPlaybackOutput,
+)
 from drdo_anc.audio.live.pipeline import StreamingPipeline
 from drdo_anc.enhancement.base import Enhancer
+from drdo_anc.gui.demo_manifest import (
+    DemoManifestError,
+    DemoScenario,
+    ValidatedDemoCatalog,
+    get_scenario_by_index,
+    load_validated_demo_catalog,
+    project_root,
+)
 
 DEFAULT_CHUNK_SIZE = 1024
-SCENARIO_FILE = Path(__file__).with_name("demo_scenarios.json")
+DEFAULT_PLAYBACK_QUEUE_CHUNKS = DEFAULT_MAX_CHUNKS
 
-# Deterministic impulse positions (samples @ 48 kHz) for presentation overlay.
+
+class _AudioOutputFactory(Protocol):
+    def __call__(
+        self,
+        sample_rate: int,
+        *,
+        output_device: int | str | None,
+        blocksize: int,
+    ) -> AudioOutput: ...
+
+
+def _default_open_output(
+    sample_rate: int,
+    *,
+    output_device: int | str | None,
+    blocksize: int,
+) -> AudioOutput:
+    from drdo_anc.audio.live import open_sounddevice_output
+
+    return open_sounddevice_output(
+        sample_rate,
+        output_device=output_device,
+        blocksize=blocksize,
+    )
+
+# Deterministic impulse positions used only by unit tests.
 _IMPULSE_OFFSETS = (
     12_000,
     48_000,
@@ -32,45 +69,20 @@ _IMPULSE_OFFSETS = (
 )
 
 
-@dataclass(frozen=True)
-class DemoScenario:
-    id: str
-    label: str
-    wav_path: Path
-    enhanced_wav_path: Path | None = None
-
-
-def project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 def load_demo_scenarios(
     manifest_path: Path | None = None,
 ) -> tuple[int, list[DemoScenario]]:
-    path = manifest_path or SCENARIO_FILE
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    sample_rate = int(payload.get("sample_rate", 48_000))
-    root = project_root()
+    catalog = load_validated_demo_catalog(manifest_path)
+    return catalog.sample_rate, list(catalog.scenarios)
 
-    scenarios: list[DemoScenario] = []
-    for entry in payload["scenarios"]:
-        enhanced = entry.get("enhanced_wav")
-        scenarios.append(
-            DemoScenario(
-                id=str(entry["id"]),
-                label=str(entry["label"]),
-                wav_path=(root / entry["wav"]).resolve(),
-                enhanced_wav_path=(
-                    (root / enhanced).resolve() if enhanced else None
-                ),
-            )
-        )
 
-    return sample_rate, scenarios
+def load_scenario_audio(scenario: DemoScenario) -> tuple[np.ndarray, int]:
+    audio, sample_rate = load_mono_wav(scenario.wav_path)
+    return audio.astype(np.float32, copy=False), sample_rate
 
 
 def apply_impulsive_overlay(audio: np.ndarray) -> np.ndarray:
-    """Add deterministic sparse impulses to clean speech for demo playback."""
+    """Add deterministic sparse impulses to clean speech (test helper only)."""
 
     mixed = np.asarray(audio, dtype=np.float32).copy()
     window = np.hanning(160).astype(np.float32)
@@ -84,19 +96,6 @@ def apply_impulsive_overlay(audio: np.ndarray) -> np.ndarray:
         mixed[offset:end] += 0.85 * window[:width]
 
     return np.clip(mixed, -1.0, 1.0)
-
-
-def load_scenario_audio(
-    scenario: DemoScenario,
-    *,
-    source_kind: str,
-) -> tuple[np.ndarray, int]:
-    audio, sample_rate = load_mono_wav(scenario.wav_path)
-
-    if source_kind == "impulsive_overlay":
-        audio = apply_impulsive_overlay(audio)
-
-    return audio.astype(np.float32, copy=False), sample_rate
 
 
 class ReplayAudioInput(AudioInput):
@@ -204,9 +203,15 @@ class ReplayAudioInput(AudioInput):
 class SelectableAudioOutput(AudioOutput):
     """Route either raw input or enhanced output to a downstream sink."""
 
-    def __init__(self, sink: AudioOutput) -> None:
+    def __init__(
+        self,
+        sink: AudioOutput,
+        *,
+        reference_for_playback: bool = False,
+    ) -> None:
         self._sink = sink
-        self._mode = "enhanced"
+        self._mode = "raw"
+        self._reference_for_playback = reference_for_playback
         self._last_raw = np.empty(0, dtype=np.float32)
         self._last_enhanced = np.empty(0, dtype=np.float32)
         self._reference_enhanced = np.empty(0, dtype=np.float32)
@@ -226,6 +231,25 @@ class SelectableAudioOutput(AudioOutput):
     @property
     def mode(self) -> str:
         return self._mode
+
+    def select_playback_chunk(
+        self,
+        raw: np.ndarray,
+        enhanced: np.ndarray,
+        reference: np.ndarray,
+    ) -> np.ndarray:
+        with self._lock:
+            if self._mode == "raw" and raw.size > 0:
+                return raw
+
+            if (
+                self._mode == "enhanced"
+                and self._reference_for_playback
+                and reference.size > 0
+            ):
+                return reference
+
+            return enhanced
 
     def prepare_raw(self, raw: np.ndarray) -> None:
         self._last_raw = np.asarray(raw, dtype=np.float32).reshape(-1)
@@ -248,15 +272,23 @@ class SelectableAudioOutput(AudioOutput):
         enhanced = np.asarray(audio, dtype=np.float32).reshape(-1)
         with self._lock:
             self._last_enhanced = enhanced
-            if self._mode == "raw" and self._last_raw.size > 0:
-                payload = self._last_raw
-            elif (
-                self._mode == "enhanced"
-                and self._reference_enhanced.size > 0
-            ):
-                payload = self._reference_enhanced
-            else:
-                payload = enhanced
+            raw = (
+                self._last_raw.copy()
+                if self._last_raw.size > 0
+                else np.empty(0, dtype=np.float32)
+            )
+            reference = (
+                self._reference_enhanced.copy()
+                if self._reference_enhanced.size > 0
+                else np.empty(0, dtype=np.float32)
+            )
+
+        enqueue_ab = getattr(self._sink, "enqueue_ab", None)
+        if enqueue_ab is not None:
+            enqueue_ab(raw, enhanced, reference)
+            return
+
+        payload = self.select_playback_chunk(raw, enhanced, reference)
 
         if payload.size > 0:
             self._sink.write(payload)
@@ -270,15 +302,20 @@ class SelectableAudioOutput(AudioOutput):
 
 
 class DemoPipelineOutput(SelectableAudioOutput):
-    """Selectable output that can substitute a reference enhanced WAV for B mode."""
+    """Selectable output; optional offline reference for precomputed B mode."""
 
     def __init__(
         self,
         sink: AudioOutput,
         replay_input: ReplayAudioInput,
         reference_audio: np.ndarray | None = None,
+        *,
+        reference_for_playback: bool = False,
     ) -> None:
-        super().__init__(sink)
+        super().__init__(
+            sink,
+            reference_for_playback=reference_for_playback,
+        )
         self._replay_input = replay_input
         self._reference_audio = (
             np.asarray(reference_audio, dtype=np.float32).reshape(-1)
@@ -289,7 +326,11 @@ class DemoPipelineOutput(SelectableAudioOutput):
     def prepare_raw(self, raw: np.ndarray) -> None:
         super().prepare_raw(raw)
 
-        if self._reference_audio is None or len(raw) == 0:
+        if (
+            not self._reference_for_playback
+            or self._reference_audio is None
+            or len(raw) == 0
+        ):
             self.prepare_reference(np.empty(0, dtype=np.float32))
             return
 
@@ -312,37 +353,49 @@ class DemoAudioController:
         *,
         model_name: str = "DeepFilterNet3",
         chunk_size: int = DEFAULT_CHUNK_SIZE,
+        output_device: int | str | None = None,
+        physical_output: bool = True,
+        open_output: _AudioOutputFactory | None = None,
         on_finished: Callable[[], None] | None = None,
     ) -> None:
         self._bridge = bridge
         self._model_name = model_name
         self._chunk_size = chunk_size
+        self._output_device = output_device
+        self._physical_output = physical_output
+        self._open_output = open_output or _default_open_output
         self._on_finished = on_finished
 
-        self._manifest_sample_rate, self._scenarios = load_demo_scenarios()
-        self._scenario_sources = self._load_source_kinds()
+        self._catalog = load_validated_demo_catalog()
         self._scenario_index = 0
+        self._ab_mode = "raw"
 
         self._enhancer: Enhancer | None = None
         self._pipeline: StreamingPipeline | None = None
         self._replay_input: ReplayAudioInput | None = None
         self._selectable_output: SelectableAudioOutput | None = None
-        self._sink: FakeAudioOutput | None = None
+        self._sink: AudioOutput | None = None
+        self._playback_queue: QueuedPlaybackOutput | ABQueuedPlaybackOutput | None = None
+        self._hardware_sink: AudioOutput | None = None
         self._reference_enhanced_audio = None
+        self._clean_reference_audio = None
         self._thread: threading.Thread | None = None
         self._session_lock = threading.Lock()
         self._running = False
 
     @property
     def scenarios(self) -> list[DemoScenario]:
-        return self._scenarios
+        return list(self._catalog.scenarios)
 
-    def _load_source_kinds(self) -> dict[str, str]:
-        payload = json.loads(SCENARIO_FILE.read_text(encoding="utf-8"))
-        return {
-            str(entry["id"]): str(entry.get("source", "file"))
-            for entry in payload["scenarios"]
-        }
+    @property
+    def catalog(self) -> ValidatedDemoCatalog:
+        return self._catalog
+
+    def _current_scenario(self) -> DemoScenario:
+        return get_scenario_by_index(self._catalog, self._scenario_index)
+
+    def _load_current_audio(self) -> tuple[np.ndarray, int]:
+        return load_scenario_audio(self._current_scenario())
 
     def _ensure_enhancer(self) -> Enhancer:
         if self._enhancer is None:
@@ -352,19 +405,9 @@ class DemoAudioController:
 
         return self._enhancer
 
-    def _load_current_audio(self) -> tuple[np.ndarray, int]:
-        scenario = self._scenarios[self._scenario_index]
-        source_kind = self._scenario_sources[scenario.id]
-
-        if not scenario.wav_path.is_file():
-            raise FileNotFoundError(
-                f"Demo asset not found: {scenario.wav_path}"
-            )
-
-        return load_scenario_audio(scenario, source_kind=source_kind)
-
     def _build_pipeline(self) -> None:
         enhancer = self._ensure_enhancer()
+        scenario = self._current_scenario()
         audio, sample_rate = self._load_current_audio()
 
         if sample_rate != enhancer.sample_rate():
@@ -376,29 +419,71 @@ class DemoAudioController:
         self._replay_input = ReplayAudioInput(
             audio,
             sample_rate,
-            realtime=True,
+            realtime=not self._physical_output,
         )
-        self._sink = FakeAudioOutput(sample_rate)
-        scenario = self._scenarios[self._scenario_index]
+
+        if self._physical_output:
+            self._hardware_sink = self._open_output(
+                sample_rate,
+                output_device=self._output_device,
+                blocksize=self._chunk_size,
+            )
+            self._playback_queue = ABQueuedPlaybackOutput(
+                self._hardware_sink,
+                sample_rate=sample_rate,
+                chunk_samples=self._chunk_size,
+                max_chunks=DEFAULT_PLAYBACK_QUEUE_CHUNKS,
+            )
+            self._sink = self._playback_queue
+        else:
+            self._hardware_sink = None
+            self._playback_queue = None
+            self._sink = FakeAudioOutput(sample_rate)
 
         reference_audio = None
-        if scenario.enhanced_wav_path is not None:
-            if not scenario.enhanced_wav_path.is_file():
-                raise FileNotFoundError(
-                    f"Demo enhanced asset not found: {scenario.enhanced_wav_path}"
-                )
+        reference_for_playback = scenario.enhanced_playback == "reference"
+        if scenario.enhanced_wav_path is not None and reference_for_playback:
             reference_audio, ref_rate = load_mono_wav(scenario.enhanced_wav_path)
             if ref_rate != sample_rate:
-                raise ValueError(
-                    "Reference enhanced WAV sample rate does not match input."
+                raise DemoManifestError(
+                    f"Reference enhanced WAV sample rate mismatch for "
+                    f"scenario '{scenario.id}': {scenario.enhanced_wav_path}"
                 )
+            if len(reference_audio) != len(audio):
+                raise DemoManifestError(
+                    f"Reference enhanced WAV length mismatch for "
+                    f"scenario '{scenario.id}': {scenario.enhanced_wav_path}"
+                )
+
+        if scenario.clean_reference_path is not None:
+            clean_audio, clean_rate = load_mono_wav(scenario.clean_reference_path)
+            if clean_rate != sample_rate:
+                raise DemoManifestError(
+                    f"Clean reference sample rate mismatch for "
+                    f"scenario '{scenario.id}': {scenario.clean_reference_path}"
+                )
+            if len(clean_audio) != len(audio):
+                raise DemoManifestError(
+                    f"Clean reference length mismatch for "
+                    f"scenario '{scenario.id}': {scenario.clean_reference_path}"
+                )
+            self._clean_reference_audio = clean_audio
+        else:
+            self._clean_reference_audio = None
 
         self._reference_enhanced_audio = reference_audio
         self._selectable_output = DemoPipelineOutput(
             self._sink,
             self._replay_input,
             reference_audio,
+            reference_for_playback=reference_for_playback,
         )
+        if self._playback_queue is not None:
+            bind = getattr(self._playback_queue, "bind_selectable", None)
+            if bind is not None:
+                bind(self._selectable_output)
+
+        self._selectable_output.set_mode(self._ab_mode)
 
         self._bridge.set_stream_metadata(
             model_name=self._model_name,
@@ -408,22 +493,20 @@ class DemoAudioController:
         self._bridge.clear_error()
 
         def on_telemetry(in_chunk, out_chunk, proc_time):
-            display_out = out_chunk
-            if self._reference_enhanced_audio is not None and len(in_chunk) > 0:
-                start = self._replay_input.last_chunk_start
-                end = start + len(in_chunk)
-                reference = self._reference_enhanced_audio[start:end]
-                if len(reference) == len(in_chunk):
-                    display_out = reference
-
             if self._selectable_output is not None:
-                self._selectable_output.bind_chunk(in_chunk, display_out)
+                self._selectable_output.bind_chunk(in_chunk, out_chunk)
+
+            stats = {"input_overflows": 0, "output_underflows": 0}
+            if self._playback_queue is not None:
+                stats["playback_queue"] = (
+                    self._playback_queue.timing_stats.as_dict()
+                )
 
             self._bridge.publish_data(
                 in_chunk,
-                display_out,
+                out_chunk,
                 proc_time,
-                stats={"input_overflows": 0, "output_underflows": 0},
+                stats=stats,
             )
             self._bridge.set_pipeline_stage("df3")
 
@@ -437,14 +520,19 @@ class DemoAudioController:
         )
 
     def set_scenario_index(self, index: int) -> None:
-        if index < 0 or index >= len(self._scenarios):
-            raise IndexError("scenario index out of range.")
-
+        scenario = get_scenario_by_index(self._catalog, index)
         self.stop()
         self._scenario_index = index
-        self._bridge.set_demo_scenario(self._scenarios[index].label)
+        self._bridge.set_demo_scenario(scenario.label)
+        self._bridge.set_selected_scenario_index(index)
+        self._bridge.clear_error()
 
     def set_ab_mode(self, mode: str) -> None:
+        if mode not in {"raw", "enhanced"}:
+            raise ValueError("mode must be 'raw' or 'enhanced'.")
+
+        self._ab_mode = mode
+
         if self._selectable_output is not None:
             self._selectable_output.set_mode(mode)
 
@@ -462,6 +550,11 @@ class DemoAudioController:
 
             try:
                 self._build_pipeline()
+            except DemoManifestError as exc:
+                self._bridge.set_error(f"Demo asset invalid: {exc}")
+                self._bridge.set_audio_status("Error")
+                traceback.print_exc()
+                return
             except Exception as exc:
                 self._bridge.set_error(f"Demo startup failed: {exc}")
                 self._bridge.set_audio_status("Error")
@@ -520,14 +613,23 @@ class DemoAudioController:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5.0)
 
+        if self._sink is not None:
+            try:
+                self._sink.close()
+            except Exception:
+                traceback.print_exc()
+
         if self._enhancer is not None:
             self._enhancer.reset()
 
         self._pipeline = None
         self._replay_input = None
         self._selectable_output = None
+        self._playback_queue = None
+        self._hardware_sink = None
         self._sink = None
         self._reference_enhanced_audio = None
+        self._clean_reference_audio = None
         self._thread = None
         self._running = False
         self._bridge.set_playback_state("stopped")
