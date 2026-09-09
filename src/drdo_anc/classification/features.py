@@ -457,6 +457,28 @@ def extract_features(
     )
 
 
+FEATURE_NAMES: tuple[str, ...] = (
+    "rms_db",
+    "zero_crossing_rate",
+    "spectral_centroid_hz",
+    "spectral_bandwidth_hz",
+    "spectral_flatness",
+    "spectral_rolloff_hz",
+    "low_band_ratio",
+    "mid_band_ratio",
+    "high_band_ratio",
+    "crest_factor",
+    "peak_envelope",
+    "rms_variability",
+    "impulsive_index",
+    "tonal_index",
+    "modulation_index",
+    "silence_ratio",
+)
+
+FEATURE_VERSION = "noise-features-v1"
+
+
 def feature_vector(features: AggregatedFeatures) -> np.ndarray:
     """Return a fixed-order numeric vector for inspection/testing."""
 

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 
+from .base import ClassificationResult, NoiseClassifierBase
 from .categories import NOISE_CLASSES, UNKNOWN_CLASS
 from .features import (
     DEFAULT_HOP_MS,
@@ -21,17 +20,7 @@ def _clamp(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
     return max(lower, min(upper, value))
 
 
-@dataclass(frozen=True)
-class ClassificationResult:
-    """Classifier output for one audio segment."""
-
-    predicted_class: str
-    scores: dict[str, float]
-    probabilities: dict[str, float]
-    features: AggregatedFeatures
-
-
-class NoiseClassifier:
+class NoiseClassifier(NoiseClassifierBase):
     """
     Deterministic rule-based noise classifier for defence categories.
 
@@ -115,12 +104,14 @@ class NoiseClassifier:
         scores = self._category_scores(features)
         probabilities = self._normalize_scores(scores)
         predicted = self._select_class(probabilities, features)
+        confidence = max(probabilities.values()) if probabilities else 0.0
 
         return ClassificationResult(
             predicted_class=predicted,
             scores=scores,
             probabilities=probabilities,
             features=features,
+            confidence=float(confidence),
         )
 
     def _category_scores(
