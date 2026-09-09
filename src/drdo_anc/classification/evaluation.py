@@ -27,8 +27,9 @@ from drdo_anc.dataset.source_sample import SourceSample
 from drdo_anc.dataset.zip_manifest_dataset import ZipManifestDataset
 
 from .categories import DEFENCE_NOISE_CATEGORIES, NOISE_CLASSES, UNKNOWN_CLASS
-from .classifier import ClassificationResult, NoiseClassifier
+from .classifier import NoiseClassifier
 from .features import DEFAULT_SAMPLE_RATE
+from .base import ClassificationResult
 
 
 CORPUS_EVAL_RULES_VERSION = "noise-classifier-corpus-v1"
