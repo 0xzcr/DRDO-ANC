@@ -140,11 +140,12 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | File | Responsibility | Status | Important APIs / Notes |
 |------|----------------|--------|------------------------|
 | `base.py` | Model abstraction | DONE | `Enhancer` ABC |
-| `registry.py` | Model configuration registry | DONE | `ModelConfig`, `register_model`, `get_model_config`, `list_models`, `create_enhancer` — DeepFilterNet3 registered at import |
-| `deepfilternet.py` | DF3 offline + streaming wrapper | DONE | `DeepFilterNetEnhancer` — loads PyTorch + native backends |
+| `registry.py` | Model configuration registry | DONE | `ModelConfig`, `register_model`, `get_model_config`, `list_models`, `create_enhancer` — DeepFilterNet3 and DeepFilterNet3-Finetuned registered at import |
+| `deepfilternet.py` | DF3 offline + streaming wrapper | DONE | `DeepFilterNetEnhancer` — loads PyTorch + native backends; `init_df` 3-tuple/4-tuple unpack |
+| `finetuned.py` | Fine-tuned DF3 enhancer | DONE | `FineTunedDeepFilterNetEnhancer` — epoch-130 checkpoint + derived ONNX tar.gz; does not modify `models/dfn3_finetuned/` |
 | `native.py` | ctypes wrapper for `df.dll` | DONE | `NativeDF3Backend` — `df_create`, `df_process_frame`, `df_free` |
 | `streaming.py` | Chunk → frame adapter | DONE | `StreamingBuffer` |
-| `__init__.py` | Public enhancement exports | DONE | `Enhancer`, `DeepFilterNetEnhancer`, registry helpers |
+| `__init__.py` | Public enhancement exports | DONE | `Enhancer`, `DeepFilterNetEnhancer`, `FineTunedDeepFilterNetEnhancer`, registry helpers |
 
 ### Evaluation (`src/drdo_anc/evaluation/`)
 
@@ -178,6 +179,18 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `__init__.py` | Public classification exports | DONE | v1 + v2 classifiers and features |
 
 **Isolated analysis module:** not wired into `StreamingPipeline`, GUI, or DF3.
+
+### Experiments (`src/drdo_anc/experiments/`)
+
+| File | Responsibility | Status | Important APIs / Notes |
+|------|----------------|--------|------------------------|
+| `noise_aware/strategies.py` | Classifier → strategy mapping | DONE | Documented DF3 `atten_lim_db` only; unknown/malformed fallback to `df3_full` |
+| `noise_aware/classical.py` | Spectral-subtraction baseline | DONE | Deterministic experiment-local classical enhancer |
+| `noise_aware/runner.py` | Offline experiment runner | DONE | Same 60-case mixtures; noisy/classical/DF3/adaptive; paired DF3 vs adaptive stats |
+| `noise_aware/__init__.py` | Public experiment exports | DONE | |
+| `finetuned_compare/compare.py` | Paired pretrained vs fine-tuned report compare | DONE | Pairs by `(case_id, mode)`; SI-SDR/STOI/PESQ/SNR deltas |
+| `finetuned_compare/heldout.py` | Recording-safe independent SIH-26 eval construction | DONE | Provenance inspection; disjoint from `sih26-eval-v1`; no training-holdout claim unless a file list is supplied |
+| `finetuned_compare/__init__.py` | Public compare exports | DONE | |
 
 ### GUI (`src/drdo_anc/gui/`)
 
@@ -219,6 +232,10 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | File | Responsibility | Status | Important APIs / Notes |
 |------|----------------|--------|------------------------|
 | `run_df3_manifest_benchmark.py` | **Primary** 60-case manifest benchmark CLI | DONE | Smoke + full run, mandatory validation, JSON/CSV output; `--model` selects registered enhancer (default: DeepFilterNet3) |
+| `run_dfn3_finetuned_benchmark.py` | Pretrained vs fine-tuned head-to-head | DONE | Same 60-case manifest; sequential model loads; writes `data/benchmark_results/dfn3_finetuned_compare/` |
+| `test_dfn3_finetuned.py` | Fine-tuned artifact + registry tests | DONE | Paths, ONNX bundle layout, comparison math; optional `DFN3_FINETUNED_INTEGRATION=1` load |
+| `run_dfn3_recording_safe_eval.py` | Recording-disjoint SIH-26 eval | DONE | Independent 60-case set; provenance-unverified vs training; does not modify `sih26-eval-v1` |
+| `test_dfn3_recording_safe_eval.py` | Recording-safe construction tests | DONE | Unverified provenance; fixture cannot supply extra speakers; development protocol unchanged |
 | `test_df3_manifest_benchmark.py` | Manifest benchmark tests | DONE | Mock + registry + optional HF/DF3 integration (`SIH26_INTEGRATION=1`) |
 | `test_evaluation_manifest.py` | Manifest + mixture tests | DONE | 14 tests including distribution, SNR accuracy, determinism |
 | `test_zip_manifest_dataset.py` | Dataset adapter tests | DONE | Unit + optional `SIH26_INTEGRATION=1` |
@@ -236,6 +253,8 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `run_noise_classifier_benchmark.py` | Noise classifier benchmark CLI | DONE | 60-case development manifest; confusion matrix + per-class metrics; JSON report |
 | `run_noise_classifier_corpus_eval.py` | Real SIH-26 defence-noise corpus eval | DONE | All labelled `uav_drone` / `vehicle_engine` / `impulsive_firearms` clips; unknown reported separately; writes `noise_classifier_v1_real_corpus_report.json` |
 | `train_noise_classifier_v2.py` | Train/evaluate Noise Classifier v2 | DONE | Stratified recording-safe split; LR/RF/ExtraTrees; selects by validation macro F1; saves model + report under `data/classifier_results/noise_classifier_v2/` |
+| `run_noise_aware_enhancement_experiment.py` | Offline noise-aware enhancement experiment | DONE | Same 60-case manifest; noisy / classical / DF3 / adaptive via documented `atten_lim_db`; writes JSON report |
+| `test_noise_aware_enhancement.py` | Noise-aware strategy tests | DONE | Mapping, fallback, malformed output, determinism, classical baseline |
 | `test_noise_classifier.py` | Noise classifier unit tests | DONE | Feature extraction, silence/speech/engine/drone/impulsive, chunk sizes, NaN/Inf, determinism |
 | `test_noise_classifier_corpus.py` | Corpus evaluation tests | DONE | Deterministic clip set, missing-archive reporting, unknown≠correct; optional `SIH26_INTEGRATION=1` smoke |
 | `test_noise_classifier_v2.py` | Supervised v2 tests | DONE | Split determinism, no recording leakage, save/load, probs, chunks, NaN/Inf, deterministic inference |
@@ -244,7 +263,8 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `run_usb_bluetooth_dual_mic_experiment.py` | USB-C + Bluetooth dual-mic hardware experiment (Task 6) | DONE | Reuses `independent_mic`; compatibility probe, 60 s + 5 min drift + stability captures; writes `report.txt` + metadata under `data/usb_bluetooth_dual_mic_experiment/` |
 | `test_live_passthrough.py` | Hardware passthrough diagnostics | DONE | Minimal duplex, pipeline, sine, capture-to-WAV modes |
 | `run_live_gui.py` | Real-time telemetry GUI launcher | DONE | PySide6 + QML; `--passthrough`, `--model`, `--fake`, device selection |
-| `run_live_soak.py` | Continuous live soak + JSON report | DONE | Mic → DF3 → headphones; RTF, overflows, latency estimate |
+| `run_live_soak.py` | Continuous live soak + JSON report | DONE | Mic → registered enhancer → headphones; `--model` (default DeepFilterNet3); RTF, overflows, latency estimate |
+| `test_dfn3_finetuned_live.py` | Fine-tuned live-path smoke | DONE | Registry + load/stream/flush/reset + `StreamingPipeline` fake I/O for pretrained and fine-tuned |
 | `test_gui_waveform.py` | GUI waveform downsampling tests | DONE | Empty/small/large chunk handling; no Qt or microphone required |
 | `run_demo_playback_timing.py` | Demo playback timing report | DONE | Write-interval stats for jitter diagnosis |
 | `test_gui_demo.py` | Demo mode streaming tests | DONE | train_* manifest, live B, playback queue, A/B sync + dequeue routing (21 tests) |
@@ -264,7 +284,10 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 |------|----------------|--------|-------|
 | `tests/fixtures/zip_manifest/` | ZipManifestDataset fixtures | DONE | Generated by `test_zip_manifest_dataset.py` if missing |
 | `tests/fixtures/evaluation_manifest/` | Manifest/mixture fixtures | DONE | Generated by `build_evaluation_fixtures.py` |
-| `data/classifier_results/` | Noise classifier reports + v2 artifacts | DONE | v1 corpus JSON; v2 `features_cache.npz`, `training_report.json`, `selected_model/` |
+| `data/classifier_results/` | Classifier + noise-aware experiment artifacts | DONE | v1/v2 reports; v2 `selected_model/`; `noise_aware_enhancement_v1/` |
+| `data/benchmark_results/dfn3_finetuned_compare/` | Fine-tuned vs pretrained reports | DONE (local) | `pretrained_*.json`, `finetuned_*.json`, `comparison_*.json` |
+| `data/benchmark_results/dfn3_finetuned_recording_safe/` | Recording-disjoint SIH-26 eval | DONE (local) | Independent of `sih26-eval-v1`; training hold-out **unverified** |
+| `models/dfn3_finetuned/` | Teammate fine-tuned DF3 artifact | DONE (local) | Unmodified extract; ONNX + epoch-130 checkpoint |
 | `tests/` (top-level pytest suite) | — | **NOT DONE** | No committed pytest suite; tests live under `scripts/test_*.py` |
 
 ### Benchmark results (`data/benchmark_results/`)
@@ -293,10 +316,12 @@ Defined in `src/drdo_anc/enhancement/base.py`:
 
 ```text
 Enhancer (ABC)
-   └── DeepFilterNetEnhancer
+   ├── DeepFilterNetEnhancer
+   └── FineTunedDeepFilterNetEnhancer
 
 ModelConfig / registry
-   └── DeepFilterNet3 (streaming_delay_samples=1440)
+   ├── DeepFilterNet3 (streaming_delay_samples=1440)
+   └── DeepFilterNet3-Finetuned (streaming_delay_samples=1440)
 ```
 
 ### Model registry
@@ -316,6 +341,7 @@ Implemented in `src/drdo_anc/enhancement/registry.py`:
 | Name | Factory | `streaming_delay_samples` |
 |------|---------|---------------------------|
 | `DeepFilterNet3` | `DeepFilterNetEnhancer` | `1440` |
+| `DeepFilterNet3-Finetuned` | `FineTunedDeepFilterNetEnhancer` | `1440` |
 
 Teammate fine-tuned models register via `register_model(ModelConfig(...))` before benchmark execution. Each model supplies its own streaming delay; offline delay remains `0` for all models.
 
@@ -356,6 +382,7 @@ df.enhance(model, df_state, audio)
 - Loaded from DeepFilterNet Python package (`from df import enhance, init_df`)
 - Checkpoint cached under user home (e.g. `DeepFilterNet/Cache/DeepFilterNet3`)
 - Expects **48 kHz** floating-point mono tensor `[1, T]`
+- `load()` unpacks both 3-tuple and 4-tuple `init_df()` returns (installed `df` 3.x returns 3 values)
 
 ### Streaming path
 
@@ -1770,13 +1797,261 @@ Artifacts: `data/classifier_results/noise_classifier_v2/` (`features_cache.npz`,
 
 ---
 
+### Step 13 — Noise-Aware Enhancement v1 (offline controlled experiment)
+
+| | |
+|-|-|
+| **Objective** | Determine whether classifier-selected enhancement strategies improve objective quality vs plain DF3 on the deterministic 60-case benchmark |
+| **Status** | DONE — offline experiment only; **do not proceed to live integration** based on these results |
+| **Preserved** | Classifier v2 weights (not retrained); DF3 wrapper/registry/GUI/demo/WAVs/benchmark generation unchanged |
+| **DF3 control surface** | Inspected public `df.enhance(..., atten_lim_db=Optional[float])` — documented attenuation limit. No other safe category-specific DF3 knobs without modifying internals. Experiment loads DF3 via experiment-local `load_offline_df3_session()` (handles current 3-tuple `init_df` return) without editing `DeepFilterNetEnhancer` |
+| **Architecture** | `noisy → (Classifier v2) → strategy map → DF3/classical/passthrough`; systems compared on identical mixtures from `MixtureGenerator` |
+| **Key implementation** | `src/drdo_anc/experiments/noise_aware/` (`strategies.py`, `classical.py`, `runner.py`); `scripts/run_noise_aware_enhancement_experiment.py`; `scripts/test_noise_aware_enhancement.py` |
+
+#### Strategies tested
+
+| System | Method |
+|--------|--------|
+| noisy | Passthrough |
+| classical_spectral_subtraction | Deterministic magnitude spectral subtraction (experiment-local classical baseline; no prior single-mic classical enhancer existed in-repo besides NLMS which needs a reference) |
+| df3_baseline | `df.enhance` with `atten_lim_db=None` (full attenuation) |
+| adaptive | v2 prediction → map: `uav_drone→df3_full`, `vehicle_engine→df3_atten_20`, `impulsive_firearms→df3_atten_12`; unknown/malformed → `df3_full` fallback |
+
+#### Methodology
+
+- Manifest: approved `sih26-eval-v1` **60 cases** (same cases for every system; mixtures not regenerated beyond deterministic cache)
+- Offline only; RTF = inference_s / audio_duration_s
+- Per-case log: true class, predicted class, confidence, strategy id, metrics for all systems
+
+#### Overall results (60 cases)
+
+| System | mean SI-SDR | mean STOI | mean PESQ | mean SNR | median RTF | mean RTF |
+|--------|------------:|----------:|----------:|---------:|-----------:|---------:|
+| noisy | 2.50 | 0.603 | 1.283 | 2.50 | ~0 | ~0 |
+| classical_specsub | −7.22 | 0.598 | 1.428 | −6.32 | 0.009 | 0.011 |
+| **df3_baseline** | **12.81** | **0.665** | **1.837** | **12.49** | **0.210** | **0.242** |
+| adaptive | 11.91 | 0.658 | 1.614 | 12.02 | 0.212 | 0.224 |
+
+#### By noise category (mean SI-SDR)
+
+| Category | DF3 | Adaptive |
+|----------|----:|---------:|
+| uav_drone | 13.04 | 12.96 |
+| vehicle_engine | 12.88 | 11.99 |
+| impulsive_firearms | 12.50 | 10.79 |
+
+#### By SNR (mean SI-SDR)
+
+| SNR | DF3 | Adaptive |
+|-----|----:|---------:|
+| 0 dB | 12.03 | 10.60 |
+| +5 dB | 13.58 | 13.22 |
+
+#### DF3 vs adaptive (same cases)
+
+| Metric | mean Δ | median Δ | improved | degraded | tied |
+|--------|--------:|---------:|---------:|---------:|-----:|
+| SI-SDR | −0.894 | −0.371 | 17 | 42 | 1 |
+| STOI | −0.008 | −0.012 | 26 | 33 | 1 |
+| PESQ | −0.224 | −0.133 | 18 | 41 | 1 |
+| SNR | −0.470 | −0.089 | 27 | 32 | 1 |
+
+#### Classification analysis (on speech+noise mixtures)
+
+- Accuracy **0.533** (32/60) — v2 was trained on **pure noise**, not mixtures
+- Predicted distribution bias: vehicle_engine 38, impulsive 21, uav_drone 1 (truth 20/20/20)
+- Strategy usage: `df3_atten_20`×38, `df3_atten_12`×21, `df3_full`×1
+- Mean SI-SDR Δ when classification **correct**: **−1.42** (n=32)
+- Mean SI-SDR Δ when classification **wrong**: **−0.30** (n=28)
+
+**Interpretation:** Adaptive underperforms primarily due to **strategy failure** (limiting `atten_lim_db` hurts vs full DF3), compounded by mixture domain shift for the classifier. Not merely classifier error.
+
+#### Live integration decision
+
+**No — do not wire into live GUI/mic path.** Metrics do not demonstrate adaptive improvement over DF3 baseline.
+
+#### Limitations
+
+- Only documented DF3 knob varied (`atten_lim_db`); no learned category-specific models
+- Classifier not trained on speech+noise mixtures
+- Classical spectral subtraction is a weak single-channel baseline here
+- Offline CPU RTF only; no streaming latency path in this experiment
+- `DeepFilterNetEnhancer.load()` now accepts both 3-tuple and 4-tuple `init_df()` returns (this env uses a 3-tuple). The noise-aware experiment still uses its own session loader.
+
+#### Reproduce
+
+```bash
+python scripts/test_noise_aware_enhancement.py
+python scripts/run_noise_aware_enhancement_experiment.py --smoke
+python scripts/run_noise_aware_enhancement_experiment.py
+```
+
+Artifact: `data/classifier_results/noise_aware_enhancement_v1/noise_aware_enhancement_v1_report.json`
+
+---
+
+### Step 14 — Fine-tuned DeepFilterNet3 integration + head-to-head
+
+| | |
+|-|-|
+| **Objective** | Register the teammate epoch-130 DF3 artifact as a second `Enhancer` and compare it to pretrained DeepFilterNet3 on the approved 60-case manifest |
+| **Status** | DONE — registered as `DeepFilterNet3-Finetuned`; live/GUI default remains `DeepFilterNet3` |
+| **Preserved** | Pretrained DF3 paths, native `DeepFilterNet3_onnx.tar.gz`, live pipeline, GUI, classifier, noise-aware experiment, original `models/dfn3_finetuned/` files |
+| **Artifact** | Unmodified extract at `models/dfn3_finetuned/` (export `config.ini` + `checkpoints/model_130.ckpt`; ONNX `enc/erb_dec/df_dec` + `config.ini`) |
+| **Key implementation** | `src/drdo_anc/enhancement/finetuned.py`; `src/drdo_anc/experiments/finetuned_compare/`; `scripts/run_dfn3_finetuned_benchmark.py`; `scripts/test_dfn3_finetuned.py` |
+
+#### Integration notes
+
+- Offline: `init_df(model_base_dir=.../_export_model, epoch=130, log_file=None)`
+- Streaming: packs ONNX members into `data/cache/dfn3_finetuned_onnx.tar.gz` with native `tmp/export/` layout; original export tree is not rewritten
+- Streaming delay remains **1440** samples at 48 kHz (same DF lookahead / hop as pretrained)
+- Selectable via existing `--model DeepFilterNet3-Finetuned` on benchmark and live CLIs
+
+#### Full 60-case results (60 cases × 2 modes = 120 paired rows, 0 failures)
+
+Source: `data/benchmark_results/dfn3_finetuned_compare/`
+
+| System | mean SI-SDR | mean STOI | mean PESQ | mean SNR | median RTF |
+|--------|------------:|----------:|----------:|---------:|-----------:|
+| DeepFilterNet3 | 12.71 | 0.667 | 1.850 | 12.30 | 9.92× |
+| **DeepFilterNet3-Finetuned** | **14.95** | **0.708** | **2.119** | **15.01** | **8.32×** |
+
+Paired deltas (fine-tuned − pretrained):
+
+| Metric | mean delta | median delta | improved | degraded | tied |
+|--------|-----------:|-------------:|---------:|---------:|-----:|
+| SI-SDR | +2.24 dB | +1.91 dB | 118 | 2 | 0 |
+| STOI | +0.042 | +0.036 | 107 | 13 | 0 |
+| PESQ | +0.269 | +0.235 | 111 | 9 | 0 |
+| SNR | +2.71 dB | +2.31 dB | 118 | 2 | 0 |
+
+**By mode (mean SI-SDR delta):** offline +2.14 (59/1); streaming +2.33 (59/1)
+
+**By noise category (mean SI-SDR delta):** impulsive_firearms +1.91; uav_drone +1.98; vehicle_engine +2.83
+
+**By SNR (mean SI-SDR delta):** 0 dB +2.12 (60/0); +5 dB +2.36 (58/2)
+
+Smoke (2 cases × 2 modes) also improved (SI-SDR mean delta +2.95; 4/4).
+
+#### Live integration decision
+
+Fine-tuned **beats pretrained on objective metrics**. It is registered and can be used with `--model DeepFilterNet3-Finetuned`. **Default live/GUI model is still DeepFilterNet3** until a listening/demo check is done.
+
+#### Reproduce
+
+```bash
+python scripts/test_dfn3_finetuned.py
+set DFN3_FINETUNED_INTEGRATION=1
+python scripts/test_dfn3_finetuned.py
+python scripts/run_dfn3_finetuned_benchmark.py --smoke
+python scripts/run_dfn3_finetuned_benchmark.py
+```
+
+---
+
+### Step 15 — Recording-safe independent SIH-26 eval (training hold-out unverified)
+
+| | |
+|-|-|
+| **Objective** | Compare `DeepFilterNet3-Finetuned` vs `DeepFilterNet3` on real SIH-26 recordings that do not appear in the 60-case development set, with recording-level grouping |
+| **Status** | DONE — **cannot claim held-out from fine-tuning** |
+| **Preserved** | Both enhancer implementations; `sih26-eval-v1` selection and 60-case benchmark; live/GUI defaults |
+| **Key implementation** | `src/drdo_anc/experiments/finetuned_compare/heldout.py`; `scripts/run_dfn3_recording_safe_eval.py`; `scripts/test_dfn3_recording_safe_eval.py` |
+
+#### Provenance limitation (do not claim training hold-out)
+
+Searched: extracted artifact, checkpoint `state_dict`, export `config.ini`, `convert-onnx.py` paths, empty `C:\Projects\live-finetuned`. **No train/val file list exists.** `convert-onnx.py` refers to `data/mvp/finetune/dfn3-custom/`, which was not shipped. Therefore **`training_holdout_status=unverified`** and **`training_holdout_claim=false`**.
+
+What this eval *does* guarantee:
+
+- Independent protocol `sih26-finetuned-recording-safe-v1` (does not replace `sih26-eval-v1`)
+- 10 English speakers **disjoint** from the 10 development speakers
+- Noise clips grouped by `recording_source_id` (ESC-50 clip / firearm UUID / drone file) and **disjoint** from the 17 development noise recordings
+- Optional `--training-manifest` JSON can later exclude listed train IDs and enable a verified hold-out claim
+
+#### Results (60 constructed cases × 2 modes)
+
+Source: `data/benchmark_results/dfn3_finetuned_recording_safe/`
+
+| | |
+|-|-|
+| Successful paired rows | **116/120** |
+| Failed rows | **4** (2 mixture cases × 2 modes): `mixture_generation: float division by zero` on `5-103416-A-2.wav` with speakers p238 @ 5 dB and p244 @ 0 dB — **not a model crash** |
+| Training hold-out | **Unverified — do not treat as a fine-tune test set** |
+
+| System | mean SI-SDR | mean STOI | mean PESQ | mean SNR | median RTF | mean inference |
+|--------|------------:|----------:|----------:|---------:|-----------:|---------------:|
+| DeepFilterNet3 | 12.29 | 0.696 | 1.879 | 12.31 | 7.57× | 0.306 s |
+| **DeepFilterNet3-Finetuned** | **15.47** | **0.728** | **2.262** | **15.47** | **9.72×** | **0.307 s** |
+
+Paired deltas (fine-tuned − pretrained), n=116:
+
+| Metric | mean delta | median delta | improved | degraded | tied |
+|--------|-----------:|-------------:|---------:|---------:|-----:|
+| SI-SDR | +3.18 dB | +2.14 dB | 116 | 0 | 0 |
+| STOI | +0.032 | +0.030 | 102 | 14 | 0 |
+| PESQ | +0.382 | +0.320 | 110 | 6 | 0 |
+| SNR | +3.16 dB | +2.33 dB | 116 | 0 | 0 |
+
+**By mode (mean SI-SDR delta):** offline +3.20 (58/0); streaming +3.16 (58/0)
+
+**By SNR (mean SI-SDR delta):** 0 dB +2.92; +5 dB +3.43
+
+**By noise category (mean SI-SDR delta):** impulsive_firearms +2.39 (n=40); uav_drone +2.45 (n=40); vehicle_engine +4.87 (n=36 successful)
+
+#### Reproduce
+
+```bash
+python scripts/test_dfn3_recording_safe_eval.py
+python scripts/run_dfn3_recording_safe_eval.py --smoke
+python scripts/run_dfn3_recording_safe_eval.py
+```
+
+---
+
+### Step 16 — Fine-tuned DF3 live validation + soak
+
+| | |
+|-|-|
+| **Objective** | Confirm `DeepFilterNet3-Finetuned` works on the existing live path (`create_enhancer` → `StreamingPipeline` → sounddevice) without architecture changes |
+| **Status** | DONE — live path validated; **GUI/CLI default still `DeepFilterNet3`** |
+| **Preserved** | Streaming architecture, classifier, noise-aware experiment, NLMS, dual-mic, TensorRT/FP16 |
+| **How the fine-tuned model enters live** | `run_live_enhancement.py` / `run_live_soak.py` / `run_live_gui.py` `--model DeepFilterNet3-Finetuned` → `create_enhancer()` → `FineTunedDeepFilterNetEnhancer` (`process_stream` + native ONNX + `flush`) |
+
+#### Live-path smoke (no hardware)
+
+`python scripts/test_dfn3_finetuned_live.py` — **5/5 PASS** for both pretrained and fine-tuned: registry, 48 kHz, finite mono output, stream+flush length, reset determinism, `StreamingPipeline` + fake I/O.
+
+#### Hardware soak (WASAPI 9 → 8, 48 kHz, chunk 1024)
+
+Path: Microphone Array (Realtek) → `StreamingPipeline` → `DeepFilterNet3-Finetuned` → Speakers (Realtek).
+
+| Test | Result |
+|------|--------|
+| 30 s smoke | PASS — 0 input overflows; wall RTF 0.960; processing 7.73 s / 30 s; report `soak_2026-09-10_15-44-43.json` |
+| 5 min soak | PASS — 0 input overflows; wall RTF **0.996**; processing **73.6 s / 300 s** (~24.5%); 14008 chunks; samples in=out 14,344,192; peak in 0.222 / peak out 0.216; duplex buffer estimate ~43 ms; report `soak_2026-09-10_15-50-07.json` |
+
+No crash, no overflow accumulation, flush on shutdown. Manual listening still recommended before switching the default.
+
+#### Reproduce
+
+```bash
+python scripts/test_dfn3_finetuned_live.py
+python scripts/run_live_soak.py --list-devices
+python scripts/run_live_soak.py --model DeepFilterNet3-Finetuned --duration-s 30 --input-device 9 --output-device 8
+python scripts/run_live_soak.py --model DeepFilterNet3-Finetuned --duration-s 300 --input-device 9 --output-device 8
+python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device 9 --output-device 8
+```
+
+---
+
 ## LAST VERIFIED
 
-**2026-09-09**
+**2026-09-10**
 
 ## CURRENT PROJECT STATE
 
-The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 today), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for DeepFilterNet3. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`. A **live audio I/O layer** (`StreamingPipeline` + sounddevice backend) supports real-time microphone → enhancer → speaker streaming with pass-through mode for hardware latency testing, session recording, offline analysis, and deterministic replay of recorded inputs through any registered model. A validated **NLMS adaptive residual-noise filter** (`NLMSFilter`) exists as a standalone DSP primitive with synthetic tests. A **dual-microphone reference architecture** (`MultiMicConfig`, synchronized `SoundDeviceMultiChannelInput`, configurable `ChannelRouter`) supports future AI + NLMS experiments without modifying the existing mono DF3 live path. An **independent-device experiment tool** (`scripts/test_independent_microphones.py`) captures from two separate input devices (e.g. Realtek primary + AB13X reference) with explicit drift/delay reporting — not integrated into the production pipeline.
+The repository provides a complete **deterministic benchmark pipeline** from Hugging Face ZIP manifests through mixture generation, model-boundary resampling, enhancement via any registered `Enhancer` (DeepFilterNet3 and DeepFilterNet3-Finetuned), delay-aware evaluation, and JSON benchmark reports. The approved **60-case development manifest** (`sih26-eval-v1`) has been executed end-to-end with **zero failures** for pretrained DeepFilterNet3 and for the epoch-130 fine-tuned artifact. A **minimal model registry** wires enhancer factories and per-model streaming delay into `ManifestBenchmarkRunner`. A **live audio I/O layer** (`StreamingPipeline` + sounddevice backend) supports real-time microphone → enhancer → speaker streaming with pass-through mode for hardware latency testing, session recording, offline analysis, and deterministic replay of recorded inputs through any registered model. A validated **NLMS adaptive residual-noise filter** (`NLMSFilter`) exists as a standalone DSP primitive with synthetic tests. A **dual-microphone reference architecture** (`MultiMicConfig`, synchronized `SoundDeviceMultiChannelInput`, configurable `ChannelRouter`) supports future AI + NLMS experiments without modifying the existing mono DF3 live path. An **independent-device experiment tool** (`scripts/test_independent_microphones.py`) captures from two separate input devices (e.g. Realtek primary + AB13X reference) with explicit drift/delay reporting — not integrated into the production pipeline.
 
 A **USB-C + Bluetooth independent-device experiment** (Task 6, `scripts/run_usb_bluetooth_dual_mic_experiment.py`) measured EarPods (WASAPI 21 @ 48 kHz) + Boult Airbass (WASAPI 19 @ 16 kHz). Result: **Category C — poor reference** (essentially absent correlation, unstable delay, ~80 ms/min drift). **Do not integrate NLMS** with this pair; use synchronized 2-ch hardware instead.
 
@@ -1784,7 +2059,13 @@ A **real-time telemetry GUI** (`src/drdo_anc/gui/`, `scripts/run_live_gui.py`) p
 
 An **isolated noise classifier v1** (`NoiseClassifier`) remains available for comparison. **Noise Classifier v2** (`SupervisedNoiseClassifier`, Extra Trees selected by validation macro F1) uses the same `noise-features-v1` vectors on a recording-safe stratified SIH-26 split and reaches test macro F1 **0.863** vs v1 **0.095** on the same held-out test set. **Not production-ready; not integrated into live DF3 or GUI.**
 
+An **offline noise-aware enhancement experiment** (`experiments/noise_aware`, Step 13) compared noisy / classical spectral subtraction / DF3 / classifier-adaptive DF3 (`atten_lim_db` strategies) on the same 60-case manifest. **Adaptive did not beat DF3** (mean SI-SDR Δ −0.89; 42/60 degraded). **Do not integrate into the live path** based on these results.
+
+A **fine-tuned DeepFilterNet3 artifact** (epoch 130) is registered as `DeepFilterNet3-Finetuned` with the same 1440-sample streaming delay. Head-to-head on the 60-case manifest (**120/120** paired rows, 0 failures) shows the fine-tuned model **beats pretrained** (mean SI-SDR +2.24 dB, 118/2 improved/degraded). A **recording-disjoint SIH-26 eval** (Step 15) on different speakers/noise recordings also favours the fine-tuned model (mean SI-SDR +3.18 dB on 116 successful paired rows) but **cannot be claimed as held-out from fine-tuning** because no training file list shipped with the artifact. **Live-path validation (Step 16)** ran the fine-tuned model through existing `StreamingPipeline` smoke tests and a **5 min WASAPI soak (0 overflows, RTF 0.996)**. **Live/GUI default remains DeepFilterNet3**; use `--model DeepFilterNet3-Finetuned` to try it.
+
 ## NEXT RECOMMENDED ACTION
 
-1. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B; then Live Mode with `--input-device` / `--output-device` from `run_live_soak.py --list-devices`.
-2. **Procure synchronized 2-ch ADC for dual-mic NLMS** — Task 6 showed USB-C + Bluetooth independent devices are Category C; do not proceed with NLMS on that pair.
+1. **Listen on headphones** — `python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device 9 --output-device 8` (or GUI `--model DeepFilterNet3-Finetuned`); switch the default only after a demo check.
+2. **Obtain the fine-tune train file list** — without it, no SIH-26 eval can be labeled held-out from training.
+3. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B.
+4. **Procure synchronized 2-ch ADC for dual-mic NLMS** — USB-C + Bluetooth remains Category C.
