@@ -8,6 +8,8 @@ readonly VENV_DIR="${PROJECT_ROOT}/.venv"
 readonly DF_DIR="${PROJECT_ROOT}/external/DeepFilterNet"
 readonly MODEL_ROOT="${PROJECT_ROOT}/models/dfn3_finetuned"
 readonly DF_REPO="${DEEPFILTERNET_REPO:-https://github.com/Rikorose/DeepFilterNet.git}"
+readonly BUILD_TMP="${PROJECT_ROOT}/.tmp"
+readonly CARGO_HOME_DIR="${PROJECT_ROOT}/.cargo"
 
 trap 'printf "\nERROR: setup failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
@@ -35,6 +37,13 @@ fi
 
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
+
+# Keep large pip/Rust/temp files on the same volume as the checkout. This is
+# important when the checkout is on a pendrive and the Pi root filesystem is small.
+mkdir -p "${BUILD_TMP}" "${CARGO_HOME_DIR}"
+export TMPDIR="${BUILD_TMP}"
+export CARGO_HOME="${CARGO_HOME_DIR}"
+export PIP_NO_CACHE_DIR=1
 
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install \

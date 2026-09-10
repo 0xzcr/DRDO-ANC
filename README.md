@@ -15,6 +15,10 @@ dependencies, builds the DeepFilterNet Python extension, validates the
 checked-in fine-tuned artifact, and requires the Linux native library at
 `external/DeepFilterNet/target/release/libdf.so`.
 
+The checkout may live on a pendrive. The script keeps pip, Rust, and temporary
+build data under that checkout; use a Linux filesystem such as ext4 for the
+pendrive because FAT/exFAT/NTFS can break executable permissions or symlinks.
+
 If `external/DeepFilterNet` already exists, the script reuses it. Set
 `DEEPFILTERNET_REPO` only when a compatible fork is required:
 
