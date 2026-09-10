@@ -263,7 +263,8 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `run_usb_bluetooth_dual_mic_experiment.py` | USB-C + Bluetooth dual-mic hardware experiment (Task 6) | DONE | Reuses `independent_mic`; compatibility probe, 60 s + 5 min drift + stability captures; writes `report.txt` + metadata under `data/usb_bluetooth_dual_mic_experiment/` |
 | `test_live_passthrough.py` | Hardware passthrough diagnostics | DONE | Minimal duplex, pipeline, sine, capture-to-WAV modes |
 | `run_live_gui.py` | Real-time telemetry GUI launcher | DONE | PySide6 + QML; `--passthrough`, `--model`, `--fake`, device selection |
-| `run_live_soak.py` | Continuous live soak + JSON report | DONE | Mic → DF3 → headphones; RTF, overflows, latency estimate |
+| `run_live_soak.py` | Continuous live soak + JSON report | DONE | Mic → registered enhancer → headphones; `--model` (default DeepFilterNet3); RTF, overflows, latency estimate |
+| `test_dfn3_finetuned_live.py` | Fine-tuned live-path smoke | DONE | Registry + load/stream/flush/reset + `StreamingPipeline` fake I/O for pretrained and fine-tuned |
 | `test_gui_waveform.py` | GUI waveform downsampling tests | DONE | Empty/small/large chunk handling; no Qt or microphone required |
 | `run_demo_playback_timing.py` | Demo playback timing report | DONE | Write-interval stats for jitter diagnosis |
 | `test_gui_demo.py` | Demo mode streaming tests | DONE | train_* manifest, live B, playback queue, A/B sync + dequeue routing (21 tests) |
@@ -2008,6 +2009,42 @@ python scripts/run_dfn3_recording_safe_eval.py
 
 ---
 
+### Step 16 — Fine-tuned DF3 live validation + soak
+
+| | |
+|-|-|
+| **Objective** | Confirm `DeepFilterNet3-Finetuned` works on the existing live path (`create_enhancer` → `StreamingPipeline` → sounddevice) without architecture changes |
+| **Status** | DONE — live path validated; **GUI/CLI default still `DeepFilterNet3`** |
+| **Preserved** | Streaming architecture, classifier, noise-aware experiment, NLMS, dual-mic, TensorRT/FP16 |
+| **How the fine-tuned model enters live** | `run_live_enhancement.py` / `run_live_soak.py` / `run_live_gui.py` `--model DeepFilterNet3-Finetuned` → `create_enhancer()` → `FineTunedDeepFilterNetEnhancer` (`process_stream` + native ONNX + `flush`) |
+
+#### Live-path smoke (no hardware)
+
+`python scripts/test_dfn3_finetuned_live.py` — **5/5 PASS** for both pretrained and fine-tuned: registry, 48 kHz, finite mono output, stream+flush length, reset determinism, `StreamingPipeline` + fake I/O.
+
+#### Hardware soak (WASAPI 9 → 8, 48 kHz, chunk 1024)
+
+Path: Microphone Array (Realtek) → `StreamingPipeline` → `DeepFilterNet3-Finetuned` → Speakers (Realtek).
+
+| Test | Result |
+|------|--------|
+| 30 s smoke | PASS — 0 input overflows; wall RTF 0.960; processing 7.73 s / 30 s; report `soak_2026-09-10_15-44-43.json` |
+| 5 min soak | PASS — 0 input overflows; wall RTF **0.996**; processing **73.6 s / 300 s** (~24.5%); 14008 chunks; samples in=out 14,344,192; peak in 0.222 / peak out 0.216; duplex buffer estimate ~43 ms; report `soak_2026-09-10_15-50-07.json` |
+
+No crash, no overflow accumulation, flush on shutdown. Manual listening still recommended before switching the default.
+
+#### Reproduce
+
+```bash
+python scripts/test_dfn3_finetuned_live.py
+python scripts/run_live_soak.py --list-devices
+python scripts/run_live_soak.py --model DeepFilterNet3-Finetuned --duration-s 30 --input-device 9 --output-device 8
+python scripts/run_live_soak.py --model DeepFilterNet3-Finetuned --duration-s 300 --input-device 9 --output-device 8
+python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device 9 --output-device 8
+```
+
+---
+
 ## LAST VERIFIED
 
 **2026-09-10**
@@ -2024,11 +2061,11 @@ An **isolated noise classifier v1** (`NoiseClassifier`) remains available for co
 
 An **offline noise-aware enhancement experiment** (`experiments/noise_aware`, Step 13) compared noisy / classical spectral subtraction / DF3 / classifier-adaptive DF3 (`atten_lim_db` strategies) on the same 60-case manifest. **Adaptive did not beat DF3** (mean SI-SDR Δ −0.89; 42/60 degraded). **Do not integrate into the live path** based on these results.
 
-A **fine-tuned DeepFilterNet3 artifact** (epoch 130) is registered as `DeepFilterNet3-Finetuned` with the same 1440-sample streaming delay. Head-to-head on the 60-case manifest (**120/120** paired rows, 0 failures) shows the fine-tuned model **beats pretrained** (mean SI-SDR +2.24 dB, 118/2 improved/degraded). A **recording-disjoint SIH-26 eval** (Step 15) on different speakers/noise recordings also favours the fine-tuned model (mean SI-SDR +3.18 dB on 116 successful paired rows) but **cannot be claimed as held-out from fine-tuning** because no training file list shipped with the artifact. **Live/GUI default remains DeepFilterNet3** until a listening check; use `--model DeepFilterNet3-Finetuned` to try it.
+A **fine-tuned DeepFilterNet3 artifact** (epoch 130) is registered as `DeepFilterNet3-Finetuned` with the same 1440-sample streaming delay. Head-to-head on the 60-case manifest (**120/120** paired rows, 0 failures) shows the fine-tuned model **beats pretrained** (mean SI-SDR +2.24 dB, 118/2 improved/degraded). A **recording-disjoint SIH-26 eval** (Step 15) on different speakers/noise recordings also favours the fine-tuned model (mean SI-SDR +3.18 dB on 116 successful paired rows) but **cannot be claimed as held-out from fine-tuning** because no training file list shipped with the artifact. **Live-path validation (Step 16)** ran the fine-tuned model through existing `StreamingPipeline` smoke tests and a **5 min WASAPI soak (0 overflows, RTF 0.996)**. **Live/GUI default remains DeepFilterNet3**; use `--model DeepFilterNet3-Finetuned` to try it.
 
 ## NEXT RECOMMENDED ACTION
 
-1. **Obtain the fine-tune train file list** — without it, no SIH-26 eval can be labeled held-out from training. If a `training_sources.json` is supplied, re-run `scripts/run_dfn3_recording_safe_eval.py --training-manifest ...`.
-2. **Listen to fine-tuned DF3 live** — `python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned` and/or GUI with `--model DeepFilterNet3-Finetuned`; switch the default only after a demo check.
-3. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B; then Live Mode with `--input-device` / `--output-device` from `run_live_soak.py --list-devices`.
-4. **Procure synchronized 2-ch ADC for dual-mic NLMS** — Task 6 showed USB-C + Bluetooth independent devices are Category C; do not proceed with NLMS on that pair.
+1. **Listen on headphones** — `python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device 9 --output-device 8` (or GUI `--model DeepFilterNet3-Finetuned`); switch the default only after a demo check.
+2. **Obtain the fine-tune train file list** — without it, no SIH-26 eval can be labeled held-out from training.
+3. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B.
+4. **Procure synchronized 2-ch ADC for dual-mic NLMS** — USB-C + Bluetooth remains Category C.
