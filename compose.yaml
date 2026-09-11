@@ -4,10 +4,13 @@ services:
       context: .
       args:
         DEEPFILTERNET_REPO: ${DEEPFILTERNET_REPO:-https://github.com/Rikorose/DeepFilterNet.git}
+        DEEPFILTERNET_REF: ${DEEPFILTERNET_REF:-main}
     image: drdo-anc:latest
     devices:
       - /dev/snd:/dev/snd
     restart: unless-stopped
+    volumes:
+      - ./data:/opt/drdo-anc/data
     command:
       - --model
       - DeepFilterNet3

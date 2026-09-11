@@ -13,11 +13,13 @@ readonly FORCE_SETUP="${DRDO_ANC_FORCE_SETUP:-0}"
 readonly BUILD_TMP="${PROJECT_ROOT}/.tmp"
 readonly CARGO_HOME_DIR="${PROJECT_ROOT}/.cargo"
 readonly PIP_BUILD_TRACKER_DIR="${PROJECT_ROOT}/.pip-build-tracker"
+readonly DF_CAPI_STAGE="${BUILD_TMP}/df-capi"
 
 mkdir -p \
   "${BUILD_TMP}" \
   "${CARGO_HOME_DIR}" \
-  "${PIP_BUILD_TRACKER_DIR}"
+  "${PIP_BUILD_TRACKER_DIR}" \
+  "${DF_CAPI_STAGE}"
 
 export TMPDIR="${BUILD_TMP}"
 export CARGO_HOME="${CARGO_HOME_DIR}"
@@ -112,11 +114,26 @@ done
 native_library="${DF_DIR}/target/release/libdf.so"
 if [[ "${FORCE_SETUP}" == "1" || ! -f "${native_library}" ]] || \
    ! python -c 'import df' >/dev/null 2>&1; then
-  (
-    cd "${DF_DIR}"
-    PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
-      maturin develop --release -m pyDF/Cargo.toml
-  )
+(
+  cd "${DF_DIR}"
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+    maturin develop --release -m pyDF/Cargo.toml
+  cargo install --locked cargo-c
+  cargo install --locked cbindgen
+  cargo cinstall --profile=release-lto -p deep_filter \
+    --destdir="${DF_CAPI_STAGE}"
+
+  native_library=""
+  while IFS= read -r candidate; do
+    if nm -D "${candidate}" | grep -q 'df_create'; then
+      native_library="${candidate}"
+      break
+    fi
+  done < <(find "${DF_CAPI_STAGE}" -type f -name 'libdeep_filter*.so')
+
+  [[ -n "${native_library}" ]] || die "DeepFilterNet C API library with df_create was not built"
+  cp "${native_library}" "${DF_DIR}/target/release/libdf.so"
+)
 else
   printf 'DeepFilterNet native extension already built; skipping maturin build.\n'
 fi

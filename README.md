@@ -76,5 +76,10 @@ The DeepFilterNet checkout must provide the native `libdf.so` API expected by
 this project. Use a compatible fork at build time when necessary:
 
 ```bash
-DEEPFILTERNET_REPO=https://github.com/your-org/DeepFilterNet.git docker compose build
+DEEPFILTERNET_REPO=https://github.com/your-org/DeepFilterNet.git \\
+DEEPFILTERNET_REF=your-compatible-branch docker compose build
 ```
+
+The image runs the complete `[all]` project dependency set and fails during
+build if the native library is missing `df_create`, `df_process_frame`, or
+`df_free`.
