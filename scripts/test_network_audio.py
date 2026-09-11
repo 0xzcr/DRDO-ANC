@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import struct
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -11,7 +15,7 @@ from drdo_anc.audio.live import (
     NetworkAudioOutput,
     StreamingPipeline,
 )
-from drdo_anc.audio.live.network_playback import float_to_int16
+from drdo_anc.network_demo.alsa_playback import float_to_int16
 from drdo_anc.audio.live.network_protocol import (
     DEFAULT_SAMPLE_RATE,
     DEFAULT_SAMPLES_PER_PACKET,
@@ -248,6 +252,57 @@ def test_pipeline_writes_to_network_output() -> None:
     assert np.allclose(decode_packet(sock.sent[1][0]).samples[0], 0.22)
 
 
+def test_pi_receiver_import_boundary() -> None:
+    """Pi receiver modules must not load drdo_anc.audio (and thus soundfile)."""
+
+    project_root = Path(__file__).resolve().parents[1]
+    code = """
+import sys
+from drdo_anc.network_demo.protocol import decode_packet
+from drdo_anc.network_demo.receiver import NetworkAudioReceiver
+from drdo_anc.network_demo.alsa_playback import AlsaAplayOutput
+assert "soundfile" not in sys.modules
+assert "drdo_anc.audio.io" not in sys.modules
+print("OK")
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(project_root / "src")
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"import boundary failed:\\n{result.stdout}\\n{result.stderr}"
+        )
+    assert "OK" in result.stdout
+
+
+def test_receiver_script_imports_network_demo_only() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(project_root / "src")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_network_audio_receiver.py",
+            "--help",
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stderr)
+    assert "--output-device" in result.stdout
+
+
 def test_header_layout() -> None:
     datagram = encode_packet(_frame(0.0), sequence=42)
     magic, version, seq, sr, channels, n_samples, payload_len = HEADER_STRUCT.unpack(
@@ -280,6 +335,8 @@ def main() -> None:
         test_mono_to_stereo_duplicates_channels,
         test_network_output_packetizes_arbitrary_chunks,
         test_pipeline_writes_to_network_output,
+        test_pi_receiver_import_boundary,
+        test_receiver_script_imports_network_demo_only,
         test_header_layout,
     ]
 

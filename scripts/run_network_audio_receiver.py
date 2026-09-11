@@ -7,20 +7,14 @@ import socket
 import sys
 import time
 
-from drdo_anc.audio.live.network_playback import (
-    AlsaAplayOutput,
-    is_alsa_hw_device,
-    open_receiver_output,
-)
-from drdo_anc.audio.live.network_protocol import (
-    DEFAULT_SAMPLE_RATE,
-    DEFAULT_SAMPLES_PER_PACKET,
-    parse_endpoint,
-)
-from drdo_anc.audio.live.network_receiver import (
+from drdo_anc.network_demo import (
     DEFAULT_JITTER_CAPACITY,
     DEFAULT_JITTER_PREFILL,
+    DEFAULT_SAMPLE_RATE,
+    DEFAULT_SAMPLES_PER_PACKET,
     NetworkAudioReceiver,
+    open_alsa_output,
+    parse_endpoint,
 )
 
 
@@ -42,11 +36,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-device",
-        default=None,
-        help=(
-            "Playback device. ALSA hw:/plughw: strings use aplay; "
-            "otherwise a sounddevice index or name."
-        ),
+        required=True,
+        help="ALSA playback device (e.g. hw:2,0 or plughw:2,0).",
     )
     parser.add_argument(
         "--jitter-capacity",
@@ -89,11 +80,7 @@ def main() -> None:
         capacity=args.jitter_capacity,
         prefill=args.jitter_prefill,
     )
-    output = open_receiver_output(DEFAULT_SAMPLE_RATE, args.output_device)
-    alsa = isinstance(output, AlsaAplayOutput) or (
-        isinstance(args.output_device, str)
-        and is_alsa_hw_device(args.output_device)
-    )
+    output = open_alsa_output(args.output_device)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((host, port))
@@ -106,10 +93,7 @@ def main() -> None:
     print(f"Listen:       {host}:{port}")
     print(f"Sample rate:  {DEFAULT_SAMPLE_RATE} Hz")
     print(f"Packet:       {DEFAULT_SAMPLES_PER_PACKET} samples (10 ms, mono)")
-    print(
-        "Output:       "
-        f"{args.output_device if args.output_device is not None else 'default'}"
-    )
+    print(f"Output:       {args.output_device}")
     print(
         f"Jitter:       prefill={args.jitter_prefill} "
         f"capacity={args.jitter_capacity}"
@@ -151,10 +135,7 @@ def main() -> None:
             if stereo is None:
                 continue
 
-            if alsa:
-                output.write_stereo(stereo)
-            else:
-                output.write(stereo[:, 0])
+            output.write_stereo(stereo)
 
             remain = FRAME_DURATION_S - (time.perf_counter() - frame_started)
             if remain > 0:
