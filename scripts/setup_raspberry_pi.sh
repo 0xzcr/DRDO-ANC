@@ -8,7 +8,19 @@ readonly VENV_DIR="${PROJECT_ROOT}/.venv"
 readonly DF_DIR="${PROJECT_ROOT}/external/DeepFilterNet"
 readonly MODEL_ROOT="${PROJECT_ROOT}/models/dfn3_finetuned"
 readonly DF_REPO="${DEEPFILTERNET_REPO:-https://github.com/Rikorose/DeepFilterNet.git}"
+readonly BUILD_TMP="${PROJECT_ROOT}/.tmp"
+readonly CARGO_HOME_DIR="${PROJECT_ROOT}/.cargo"
+readonly PIP_BUILD_TRACKER_DIR="${PROJECT_ROOT}/.pip-build-tracker"
 
+mkdir -p \
+  "${BUILD_TMP}" \
+  "${CARGO_HOME_DIR}" \
+  "${PIP_BUILD_TRACKER_DIR}"
+
+export TMPDIR="${BUILD_TMP}"
+export CARGO_HOME="${CARGO_HOME_DIR}"
+export PIP_BUILD_TRACKER="${PIP_BUILD_TRACKER_DIR}"
+export PIP_NO_CACHE_DIR=1
 trap 'printf "\nERROR: setup failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 die() {
@@ -36,8 +48,14 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-python -m pip install --upgrade pip setuptools wheel
 python -m pip install \
+  --no-cache-dir \
+  --retries 20 \
+  --timeout 120 \
+  --upgrade pip setuptools wheel
+
+python -m pip install \
+  --no-cache-dir \
   --retries 20 \
   --timeout 120 \
   -e "${PROJECT_ROOT}[gui]" \
