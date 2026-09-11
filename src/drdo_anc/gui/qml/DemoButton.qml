@@ -9,6 +9,7 @@ Rectangle {
     width: labelItem.width + 16
     height: 28
     radius: 4
+    opacity: enabled ? 1.0 : 0.4
     color: active ? "#00E5FF" : "#151A22"
     border.color: active ? "#00E5FF" : "#2A2E35"
 
@@ -23,6 +24,7 @@ Rectangle {
 
     MouseArea {
         anchors.fill: parent
+        enabled: root.enabled
         onClicked: root.activated()
     }
 }

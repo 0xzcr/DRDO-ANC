@@ -6,7 +6,7 @@ import QtQuick.Controls
 Window {
     id: mainWindow
     width: 1024
-    height: 900
+    height: 960
     visible: true
     title: qsTr("DRDO-ANC Telemetry Console")
 
@@ -81,7 +81,7 @@ Window {
 
         DemoControls {
             Layout.fillWidth: true
-            Layout.preferredHeight: 120
+            Layout.preferredHeight: 230
         }
 
         RowLayout {

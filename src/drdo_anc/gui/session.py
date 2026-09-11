@@ -2,12 +2,27 @@ from __future__ import annotations
 
 import argparse
 
+from PySide6.QtCore import QSettings
+
+from drdo_anc.enhancement import list_models
 from drdo_anc.gui.bridge import GUIBridge
 from drdo_anc.gui.demo import DemoAudioController, load_benchmark_summary
 from drdo_anc.gui.demo_manifest import (
     DemoManifestError,
     compute_demo_reference_metrics,
     load_validated_demo_catalog,
+)
+from drdo_anc.gui.devices import (
+    GuiAudioDevice,
+    backend_index_for_combo,
+    combo_index_for_backend,
+    devices_for_selector,
+    enumerate_gui_devices,
+    input_devices,
+    live_start_block_reason,
+    match_preferred,
+    output_devices,
+    resolve_role_device,
 )
 
 
@@ -19,6 +34,48 @@ def _parse_device(value: str | None) -> int | str | None:
         return int(value)
     except ValueError:
         return value
+
+
+def _preferred_from_cli_or_saved(
+    *,
+    cli_value: int | str | None,
+    previous: GuiAudioDevice | None,
+    settings: QSettings,
+    index_key: str,
+    name_key: str,
+    hostapi_key: str,
+) -> tuple[int | None, str | None, str | None]:
+    if previous is not None:
+        return previous.index, previous.name, previous.hostapi_name
+    if isinstance(cli_value, int):
+        return cli_value, None, None
+    if isinstance(cli_value, str):
+        return None, cli_value, None
+    return (
+        _settings_int(settings, index_key),
+        _settings_str(settings, name_key),
+        _settings_str(settings, hostapi_key),
+    )
+
+
+def _settings_str(settings: QSettings, key: str) -> str | None:
+    if not settings.contains(key):
+        return None
+    value = settings.value(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _settings_int(settings: QSettings, key: str) -> int | None:
+    if not settings.contains(key):
+        return None
+    value = settings.value(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class ApplicationSession:
@@ -35,6 +92,17 @@ class ApplicationSession:
         self._args = args
         self._live_controller = live_controller
         self._mode = "demo"
+        self._settings = QSettings()
+        self._all_devices: list[GuiAudioDevice] = []
+        self._input_choices: list[GuiAudioDevice] = []
+        self._output_choices: list[GuiAudioDevice] = []
+        self._model_names: tuple[str, ...] = list_models()
+        self._selected_input: GuiAudioDevice | None = None
+        self._selected_output: GuiAudioDevice | None = None
+        self._selected_model = str(args.model)
+        self._show_all_devices = bool(
+            self._settings.value("audio/show_all_devices", False, type=bool)
+        )
 
         try:
             catalog = load_validated_demo_catalog()
@@ -85,32 +153,241 @@ class ApplicationSession:
         )
         self._bridge.set_demo_scenario(labels[0])
         self._demo_controller.set_ab_mode("raw")
+        self.refresh_devices()
         self._bridge.set_audio_status("Ready")
+
+    @property
+    def selected_input_backend_index(self) -> int | None:
+        if self._selected_input is None:
+            return None
+        return self._selected_input.index
+
+    @property
+    def selected_output_backend_index(self) -> int | None:
+        if self._selected_output is None:
+            return None
+        return self._selected_output.index
+
+    @property
+    def selected_model_name(self) -> str:
+        return self._selected_model
+
+    def refresh_devices(self) -> None:
+        try:
+            self._all_devices = enumerate_gui_devices()
+        except Exception as exc:
+            self._all_devices = []
+            self._input_choices = []
+            self._output_choices = []
+            self._selected_input = None
+            self._selected_output = None
+            self._publish_device_choices()
+            self._bridge.set_error(f"Audio device enumeration failed: {exc}")
+            return
+
+        previous_input = self._selected_input
+        previous_output = self._selected_output
+        cli_input = _parse_device(self._args.input_device)
+        cli_output = _parse_device(self._args.output_device)
+        input_index, input_name, input_hostapi = _preferred_from_cli_or_saved(
+            cli_value=cli_input,
+            previous=previous_input,
+            settings=self._settings,
+            index_key="audio/input_index",
+            name_key="audio/input_name",
+            hostapi_key="audio/input_hostapi",
+        )
+        output_index, output_name, output_hostapi = _preferred_from_cli_or_saved(
+            cli_value=cli_output,
+            previous=previous_output,
+            settings=self._settings,
+            index_key="audio/output_index",
+            name_key="audio/output_name",
+            hostapi_key="audio/output_hostapi",
+        )
+
+        self._input_choices = devices_for_selector(
+            self._all_devices,
+            "input",
+            show_all=self._show_all_devices,
+        )
+        self._output_choices = devices_for_selector(
+            self._all_devices,
+            "output",
+            show_all=self._show_all_devices,
+        )
+
+        self._selected_input = resolve_role_device(
+            self._input_choices,
+            preferred_index=input_index,
+            preferred_name=input_name,
+            preferred_hostapi=input_hostapi,
+        )
+        self._selected_output = resolve_role_device(
+            self._output_choices,
+            preferred_index=output_index,
+            preferred_name=output_name,
+            preferred_hostapi=output_hostapi,
+        )
+
+        if self._selected_input is None:
+            self._selected_input = match_preferred(
+                input_devices(self._all_devices),
+                index=input_index,
+                name=input_name,
+                hostapi_name=input_hostapi,
+            )
+        if self._selected_output is None:
+            self._selected_output = match_preferred(
+                output_devices(self._all_devices),
+                index=output_index,
+                name=output_name,
+                hostapi_name=output_hostapi,
+            )
+
+        self._input_choices = devices_for_selector(
+            self._all_devices,
+            "input",
+            show_all=self._show_all_devices,
+            keep=self._selected_input,
+        )
+        self._output_choices = devices_for_selector(
+            self._all_devices,
+            "output",
+            show_all=self._show_all_devices,
+            keep=self._selected_output,
+        )
+
+        self._apply_io_to_controllers()
+        self._persist_selection()
+        self._publish_device_choices()
+
+        block = live_start_block_reason(
+            self._selected_input,
+            self._selected_output,
+            available_inputs=self._input_choices,
+            available_outputs=self._output_choices,
+        )
+        if block is None:
+            self._bridge.clear_error()
+        else:
+            self._bridge.set_error(block)
+
+    def select_input_device(self, combo_index: int) -> None:
+        if self._live_controller.is_started:
+            self._bridge.set_error("Stop Live Mode before changing the input device.")
+            self._publish_device_choices()
+            return
+
+        backend_index = backend_index_for_combo(self._input_choices, combo_index)
+        if backend_index is None:
+            self._selected_input = None
+            self._publish_device_choices()
+            self._bridge.set_error("Selected input device is no longer available.")
+            return
+
+        self._selected_input = self._input_choices[combo_index]
+        self._apply_io_to_controllers()
+        self._persist_selection()
+        self._publish_device_choices()
+        self._bridge.clear_error()
+
+    def select_output_device(self, combo_index: int) -> None:
+        if self._live_controller.is_started:
+            self._bridge.set_error("Stop Live Mode before changing the output device.")
+            self._publish_device_choices()
+            return
+
+        backend_index = backend_index_for_combo(self._output_choices, combo_index)
+        if backend_index is None:
+            self._selected_output = None
+            self._publish_device_choices()
+            self._bridge.set_error("Selected output device is no longer available.")
+            return
+
+        self._selected_output = self._output_choices[combo_index]
+        self._apply_io_to_controllers()
+        self._persist_selection()
+        self._publish_device_choices()
+        self._bridge.clear_error()
+
+    def select_model(self, combo_index: int) -> None:
+        if self._live_controller.is_started:
+            self._bridge.set_error("Stop Live Mode before changing the model.")
+            self._publish_device_choices()
+            return
+
+        if not (0 <= combo_index < len(self._model_names)):
+            self._bridge.set_error("Selected model is not available.")
+            return
+
+        model_name = self._model_names[combo_index]
+        try:
+            self._demo_controller.set_model_name(model_name)
+        except RuntimeError as exc:
+            self._bridge.set_error(str(exc))
+            self._publish_device_choices()
+            return
+
+        self._selected_model = model_name
+        self._live_controller.set_model_name(model_name)
+        self._bridge.set_stream_metadata(
+            model_name=model_name,
+            sample_rate=self._bridge.sampleRate or 48_000,
+        )
+        self._publish_device_choices()
+        self._bridge.clear_error()
+
+    def set_show_all_devices(self, show_all: bool) -> None:
+        if self._live_controller.is_started:
+            self._bridge.set_error("Stop Live Mode before changing the device list.")
+            self._publish_device_choices()
+            return
+
+        self._show_all_devices = bool(show_all)
+        self._settings.setValue("audio/show_all_devices", self._show_all_devices)
+        self.refresh_devices()
 
     def set_demo_mode(self) -> None:
         if self._mode == "demo":
             return
 
         self._live_controller.stop()
+        self._bridge.set_devices_locked(False)
         self._mode = "demo"
         self._bridge.set_operation_mode("demo")
         self._bridge.set_audio_status("Ready")
 
     def set_live_mode(self) -> None:
-        if self._mode == "live":
+        block = live_start_block_reason(
+            self._selected_input,
+            self._selected_output,
+            available_inputs=self._input_choices,
+            available_outputs=self._output_choices,
+        )
+        if block is not None:
+            self._bridge.set_error(block)
             return
 
-        self._demo_controller.stop()
-        self._mode = "live"
-        self._bridge.set_operation_mode("live")
+        if self._mode != "live":
+            self._demo_controller.stop()
+            self._mode = "live"
+            self._bridge.set_operation_mode("live")
+
+        if self._live_controller.is_started:
+            return
+
+        self._apply_io_to_controllers()
         self._live_controller.start()
-        self._bridge.set_audio_status("Live")
+        if self._live_controller.is_started:
+            self._bridge.set_devices_locked(True)
+            self._bridge.set_audio_status("Live")
 
     def play(self) -> None:
         if self._mode == "demo":
             self._demo_controller.play()
         else:
-            self._live_controller.start()
+            self.set_live_mode()
 
     def pause(self) -> None:
         if self._mode == "demo":
@@ -119,8 +396,11 @@ class ApplicationSession:
     def stop(self) -> None:
         if self._mode == "demo":
             self._demo_controller.stop()
-        else:
-            self._live_controller.stop()
+            return
+
+        self._live_controller.stop()
+        self._bridge.set_devices_locked(False)
+        self._bridge.set_audio_status("Stopped")
 
     def set_scenario(self, index: int) -> None:
         if self._mode != "demo":
@@ -141,3 +421,59 @@ class ApplicationSession:
     def shutdown(self) -> None:
         self._demo_controller.shutdown()
         self._live_controller.stop()
+        self._bridge.set_devices_locked(False)
+
+    def _apply_io_to_controllers(self) -> None:
+        input_index = self.selected_input_backend_index
+        output_index = self.selected_output_backend_index
+        self._live_controller.set_devices(
+            input_device=input_index,
+            output_device=output_index,
+        )
+        self._live_controller.set_model_name(self._selected_model)
+        self._demo_controller.set_output_device(output_index)
+
+    def _persist_selection(self) -> None:
+        if self._selected_input is not None:
+            self._settings.setValue("audio/input_index", self._selected_input.index)
+            self._settings.setValue("audio/input_name", self._selected_input.name)
+            self._settings.setValue(
+                "audio/input_hostapi",
+                self._selected_input.hostapi_name,
+            )
+        if self._selected_output is not None:
+            self._settings.setValue("audio/output_index", self._selected_output.index)
+            self._settings.setValue("audio/output_name", self._selected_output.name)
+            self._settings.setValue(
+                "audio/output_hostapi",
+                self._selected_output.hostapi_name,
+            )
+
+    def _publish_device_choices(self) -> None:
+        block = live_start_block_reason(
+            self._selected_input,
+            self._selected_output,
+            available_inputs=self._input_choices,
+            available_outputs=self._output_choices,
+        )
+        model_index = 0
+        if self._selected_model in self._model_names:
+            model_index = self._model_names.index(self._selected_model)
+
+        self._bridge.set_device_choices(
+            input_labels=[device.label() for device in self._input_choices],
+            output_labels=[device.label() for device in self._output_choices],
+            model_labels=list(self._model_names),
+            selected_input_index=combo_index_for_backend(
+                self._input_choices,
+                self.selected_input_backend_index,
+            ),
+            selected_output_index=combo_index_for_backend(
+                self._output_choices,
+                self.selected_output_backend_index,
+            ),
+            selected_model_index=model_index,
+            live_can_start=block is None,
+            live_block_reason=block or "",
+            show_all_devices=self._show_all_devices,
+        )

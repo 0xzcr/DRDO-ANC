@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 
 Item {
     id: root
@@ -11,7 +12,7 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
+        spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
@@ -27,11 +28,82 @@ Item {
             DemoButton {
                 label: "LIVE"
                 active: guiBridge.operationMode === "live"
+                enabled: guiBridge.liveCanStart || guiBridge.operationMode === "live"
                 onActivated: guiBridge.setLiveMode()
             }
 
             Item { Layout.fillWidth: true }
             Text { text: guiBridge.demoScenario; color: cyan; font.pixelSize: 10 }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            Text { text: "MODEL"; color: dim; font.pixelSize: 10; font.bold: true }
+            DeviceCombo {
+                id: modelBox
+                Layout.preferredWidth: 280
+                model: guiBridge.modelLabels
+                currentIndex: guiBridge.selectedModelIndex
+                enabled: !guiBridge.devicesLocked
+                onActivated: guiBridge.selectModel(index)
+            }
+
+            Item { Layout.fillWidth: true }
+            CheckBox {
+                text: "Show all devices"
+                checked: guiBridge.showAllDevices
+                enabled: !guiBridge.devicesLocked
+                onToggled: guiBridge.setShowAllDevices(checked)
+                palette.windowText: dim
+                palette.button: buttonBg
+                palette.highlight: cyan
+            }
+            DemoButton {
+                label: "Refresh devices"
+                enabled: !guiBridge.devicesLocked
+                onActivated: guiBridge.refreshDevices()
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            Text { text: "INPUT DEVICE"; color: dim; font.pixelSize: 10; font.bold: true }
+            DeviceCombo {
+                id: inputBox
+                Layout.fillWidth: true
+                model: guiBridge.inputDeviceLabels
+                currentIndex: guiBridge.selectedInputDeviceIndex
+                enabled: !guiBridge.devicesLocked
+                onActivated: guiBridge.selectInputDevice(index)
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            Text { text: "OUTPUT DEVICE"; color: dim; font.pixelSize: 10; font.bold: true }
+            DeviceCombo {
+                id: outputBox
+                Layout.fillWidth: true
+                model: guiBridge.outputDeviceLabels
+                currentIndex: guiBridge.selectedOutputDeviceIndex
+                enabled: !guiBridge.devicesLocked
+                onActivated: guiBridge.selectOutputDevice(index)
+            }
+        }
+
+        Text {
+            Layout.fillWidth: true
+            visible: !guiBridge.liveCanStart && guiBridge.liveBlockReason.length > 0
+            text: guiBridge.liveBlockReason
+            color: "#FF5577"
+            font.pixelSize: 11
+            wrapMode: Text.WordWrap
         }
 
         RowLayout {

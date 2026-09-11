@@ -193,8 +193,25 @@ class LiveAudioController:
     self._audio_thread: threading.Thread | None = None
 
     self._started = False
+    self._input_device = _parse_device(args.input_device)
+    self._output_device = _parse_device(args.output_device)
+    self._model_name = args.model
 
+  @property
+  def is_started(self) -> bool:
+    return self._started
 
+  def set_devices(
+    self,
+    *,
+    input_device: int | str | None,
+    output_device: int | str | None,
+  ) -> None:
+    self._input_device = input_device
+    self._output_device = output_device
+
+  def set_model_name(self, model_name: str) -> None:
+    self._model_name = model_name
 
   def start(self) -> None:
 
@@ -284,13 +301,13 @@ class LiveAudioController:
 
 
 
-      enhancer = create_enhancer(args.model)
+      enhancer = create_enhancer(self._model_name)
 
       sample_rate = args.sample_rate or enhancer.sample_rate()
 
-      mode_label = args.model
+      mode_label = self._model_name
 
-      model_name = args.model
+      model_name = self._model_name
 
 
 
@@ -300,9 +317,9 @@ class LiveAudioController:
 
 
 
-    input_device = _parse_device(args.input_device)
+    input_device = self._input_device
 
-    output_device = _parse_device(args.output_device)
+    output_device = self._output_device
 
 
 
