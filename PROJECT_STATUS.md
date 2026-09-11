@@ -118,10 +118,11 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `live/independent_mic.py` | Independent-device dual-mic capture | DONE | `IndependentMicConfig`, `record_independent_microphones`, `analyze_independent_pair`, `prepare_independent_pair_for_analysis` — parallel threads, optional per-device sample rates (`reference_sample_rate`), `synchronization=independent_devices`, drift/delay reporting |
 | `live/sounddevice_multimic.py` | Synchronized multi-channel capture | DONE | `SoundDeviceMultiChannelInput`, `record_dual_microphone`, `FakeMultiChannelAudioInput` — one `InputStream` clock |
 | `live/pipeline.py` | Live streaming orchestration | DONE | `StreamingPipeline` — optional `recorder=`; `instrumentation=`; flush tail via `note_flush_enhanced` |
-| `live/network_protocol.py` | Demo UDP audio packet encode/decode | DONE | 24-byte header (`DFAN`); 480-sample mono float32 payload @ 48 kHz |
+| `live/network_protocol.py` | Demo UDP audio packet encode/decode | DONE | Re-exports `drdo_anc.network_demo.protocol` (canonical) |
 | `live/network_output.py` | Windows `AudioOutput` that sends UDP packets | DONE | `NetworkAudioOutput` — packetizes arbitrary `write()` sizes; does not change `StreamingPipeline` |
-| `live/network_receiver.py` | Pi-side jitter buffer + stats | DONE | Bounded buffer; silence on loss/underrun; `NetworkAudioReceiver` |
-| `live/network_playback.py` | Pi playback open helper | DONE | ALSA `hw:`/`plughw:` via `aplay`; otherwise existing sounddevice output |
+| `live/network_receiver.py` | Jitter buffer + stats | DONE | Re-exports `drdo_anc.network_demo.receiver` |
+| `live/network_playback.py` | Dev playback open helper | DONE | ALSA via `network_demo`; optional sounddevice on Windows |
+| `network_demo/` | **Pi-minimal** UDP receiver stack | DONE | `protocol`, `receiver`, `alsa_playback` — **no** `soundfile`, torch, or `drdo_anc.audio` import |
 | `live/__init__.py` | Public live-audio exports | DONE | |
 | `__init__.py` | Public audio exports | DONE | Re-exports io, mixing, resampling, live helpers |
 
@@ -248,7 +249,7 @@ Both paths share the same upstream pipeline: manifest → mixture @ 16 kHz → r
 | `test_streaming_backend.py` | Native backend smoke test | DONE | Frame processing, buffer, reset |
 | `test_enhancer_streaming.py` | Enhancer streaming smoke | DONE | Arbitrary chunk sizes |
 | `run_live_enhancement.py` | Live mic → enhancer → speaker CLI | DONE | `--model`, `--passthrough`, `--diagnose-audio`, `--record-dir`, duplex I/O; `--network-output HOST:PORT` sends UDP instead of local speaker |
-| `run_network_audio_receiver.py` | Raspberry Pi UDP playback receiver | DONE | `--listen 0.0.0.0:5000`; `--output-device hw:2,0`; jitter buffer + status; **no inference on the Pi** |
+| `run_network_audio_receiver.py` | Raspberry Pi UDP playback receiver | DONE | Imports `drdo_anc.network_demo` only (no soundfile); `--listen`; `--output-device hw:2,0`; **no inference on the Pi** |
 | `test_network_audio.py` | Network audio unit tests | DONE | Encode/decode, sequence, malformed, loss, reorder, mono→stereo, pipeline write |
 | `test_live_audio.py` | Live audio pipeline tests | DONE | Fake I/O only — no physical microphone required |
 | `test_live_recording.py` | Live recording tests | DONE | WAV/session/metadata validation; delayed-enhancer alignment; energy-drop analysis |
@@ -616,6 +617,8 @@ Hardware chunk sizes are unrelated to model frame sizes.
 
 The Pi does **not** load DeepFilterNet3, run `StreamingPipeline` enhancement, or perform training. It only receives UDP packets and plays PCM.
 
+**Pi dependencies (intentionally minimal):** Python 3, **numpy**, system **`aplay`/ALSA**. The receiver script imports **`drdo_anc.network_demo` only** (not `drdo_anc.audio`), so it does **not** require soundfile, sounddevice, PyTorch, or DeepFilterNet on the Pi.
+
 ```text
 Windows microphone
     → existing StreamingPipeline
@@ -636,7 +639,8 @@ Raspberry Pi
 | Jitter buffer | prefill 4 / capacity 8 packets (40–80 ms); demo-grade, not production PLC |
 | Pi ALSA | `--output-device hw:2,0` uses `aplay` S16_LE stereo; `plughw:` if the DAC rejects the rate/format |
 | Windows CLI | `python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device <id> --network-output <pi-ip>:5000` |
-| Pi CLI | `python scripts/run_network_audio_receiver.py --listen 0.0.0.0:5000 --output-device hw:2,0` |
+| Pi CLI | `PYTHONPATH=src python3 scripts/run_network_audio_receiver.py --listen 0.0.0.0:5000 --output-device hw:2,0` |
+| Pi Python deps | `numpy` + stdlib only (via `drdo_anc.network_demo`) |
 | Tests | `python scripts/test_network_audio.py` |
 
 Local `--output-device` speaker mode is unchanged. `StreamingPipeline`, the model registry, and DeepFilterNet3 implementations are not modified for this path.
@@ -2094,11 +2098,11 @@ python scripts/test_network_audio.py
 | **Objective** | Send Windows-enhanced live audio over LAN UDP to a Raspberry Pi headphone output without moving inference to the Pi |
 | **Status** | DONE |
 | **Preserved** | DeepFilterNet3 / fine-tuned enhancer, model registry, `StreamingPipeline` loop, local `--output-device` duplex mode, benchmark/evaluation |
-| **Key implementation** | `audio/live/network_protocol.py`, `network_output.py`, `network_receiver.py`, `network_playback.py`; `scripts/run_network_audio_receiver.py`; `--network-output` on `run_live_enhancement.py`; `scripts/test_network_audio.py` |
+| **Key implementation** | `src/drdo_anc/network_demo/` (Pi-minimal); `audio/live/network_output.py` (Windows sender); re-exports in `audio/live/network_*.py`; `scripts/run_network_audio_receiver.py`; `--network-output` on `run_live_enhancement.py`; `scripts/test_network_audio.py` |
 
 **AI inference is performed on the Windows host. Raspberry Pi is used as the network audio output endpoint.**
 
-- `NetworkAudioOutput` implements existing `AudioOutput` (`write()` mono float32).
+- Pi receiver imports **`drdo_anc.network_demo`** only (avoids `drdo_anc.audio` → `soundfile`).
 - Packets: `DFAN` v1 header + 480 samples @ 48 kHz.
 - Pi receiver: jitter buffer, silence on loss, mono→stereo, ALSA `hw:` via `aplay` or sounddevice.
 - Capture-only `open_sounddevice_input()` is used only when `--network-output` is set so local speakers are not required.
@@ -2115,7 +2119,7 @@ python scripts/test_live_audio.py
 Pi:
 
 ```bash
-python scripts/run_network_audio_receiver.py --listen 0.0.0.0:5000 --output-device hw:2,0
+PYTHONPATH=src python3 scripts/run_network_audio_receiver.py --listen 0.0.0.0:5000 --output-device hw:2,0
 ```
 
 Windows (replace input index and Pi IP; do not hard-code):
@@ -2144,7 +2148,7 @@ An **offline noise-aware enhancement experiment** (`experiments/noise_aware`, St
 
 A **fine-tuned DeepFilterNet3 artifact** (epoch 130) is registered as `DeepFilterNet3-Finetuned` with the same 1440-sample streaming delay. Head-to-head on the 60-case manifest (**120/120** paired rows, 0 failures) shows the fine-tuned model **beats pretrained** (mean SI-SDR +2.24 dB, 118/2 improved/degraded). A **recording-disjoint SIH-26 eval** (Step 15) on different speakers/noise recordings also favours the fine-tuned model (mean SI-SDR +3.18 dB on 116 successful paired rows) but **cannot be claimed as held-out from fine-tuning** because no training file list shipped with the artifact. **Live-path validation (Step 16)** ran the fine-tuned model through existing `StreamingPipeline` smoke tests and a **5 min WASAPI soak (0 overflows, RTF 0.996)**. **Live/GUI default remains DeepFilterNet3**; use `--model DeepFilterNet3-Finetuned` to try it.
 
-A **network-audio demo path** sends the existing live enhancer output over UDP to a Raspberry Pi. **AI inference is performed on the Windows host. Raspberry Pi is used as the network audio output endpoint.** The Pi runs `scripts/run_network_audio_receiver.py` only (jitter buffer + ALSA/sounddevice playback). Local `--output-device` mode is unchanged.
+A **network-audio demo path** sends the existing live enhancer output over UDP to a Raspberry Pi. **AI inference is performed on the Windows host. Raspberry Pi is used as the network audio output endpoint.** The Pi runs `scripts/run_network_audio_receiver.py` via **`drdo_anc.network_demo`** (numpy + stdlib + `aplay` only; no soundfile/torch). Local `--output-device` mode is unchanged.
 
 ## NEXT RECOMMENDED ACTION
 
@@ -2152,4 +2156,4 @@ A **network-audio demo path** sends the existing live enhancer output over UDP t
 2. **Obtain the fine-tune train file list** — without it, no SIH-26 eval can be labeled held-out from training.
 3. **Rehearse the physical demo** — `python scripts/run_live_gui.py`, scenarios `1`/`2`, Play, toggle A/B.
 4. **Procure synchronized 2-ch ADC for dual-mic NLMS** — USB-C + Bluetooth remains Category C.
-5. **Network headphone demo** — on the Pi: `python scripts/run_network_audio_receiver.py --listen 0.0.0.0:5000 --output-device hw:2,0`. On Windows: `python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device <id> --network-output <pi-ip>:5000`. Inference stays on Windows.
+5. **Network headphone demo** — on the Pi: `PYTHONPATH=src python3 scripts/run_network_audio_receiver.py --listen 0.0.0.0:5000 --output-device hw:2,0`. On Windows: `python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned --input-device <id> --network-output <pi-ip>:5000`. Inference stays on Windows.
