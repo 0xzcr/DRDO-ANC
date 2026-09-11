@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
 
 from drdo_anc.gui.bridge import GUIBridge
 
@@ -20,6 +21,7 @@ def run_gui(
 
   QGuiApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
   QGuiApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+  QQuickStyle.setStyle("Fusion")
 
   app = QGuiApplication(sys.argv)
   app.setOrganizationName("DRDO")

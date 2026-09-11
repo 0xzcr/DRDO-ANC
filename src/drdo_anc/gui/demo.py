@@ -383,6 +383,21 @@ class DemoAudioController:
         self._session_lock = threading.Lock()
         self._running = False
 
+    def set_output_device(self, output_device: int | str | None) -> None:
+        """Use this output device the next time demo playback starts."""
+
+        self._output_device = output_device
+
+    def set_model_name(self, model_name: str) -> None:
+        """Use this registered model the next time demo playback starts."""
+
+        if model_name == self._model_name:
+            return
+        if self._running:
+            raise RuntimeError("Stop demo playback before changing the model.")
+        self._model_name = model_name
+        self._enhancer = None
+
     @property
     def scenarios(self) -> list[DemoScenario]:
         return list(self._catalog.scenarios)

@@ -35,6 +35,7 @@ class GUIBridge(QObject):
   historyUpdated = Signal()
   errorChanged = Signal()
   demoStateChanged = Signal()
+  devicesChanged = Signal()
 
   def __init__(self, fps: int = 60) -> None:
     super().__init__()
@@ -98,6 +99,16 @@ class GUIBridge(QObject):
     self._demo_enhanced_ref_stoi = 0.0
     self._demo_noisy_pesq = 0.0
     self._demo_enhanced_ref_pesq = 0.0
+    self._input_device_labels: list[str] = []
+    self._output_device_labels: list[str] = []
+    self._model_labels: list[str] = []
+    self._selected_input_device_index = -1
+    self._selected_output_device_index = -1
+    self._selected_model_index = 0
+    self._live_can_start = False
+    self._live_block_reason = ""
+    self._devices_locked = False
+    self._show_all_devices = False
 
   def start_timer(self) -> None:
     interval = int(1000 / self._fps)
@@ -258,6 +269,76 @@ class GUIBridge(QObject):
   def demoEnhancedRefPesq(self) -> float:
     return self._demo_enhanced_ref_pesq
 
+  @Property(list, notify=devicesChanged)
+  def inputDeviceLabels(self) -> list[str]:
+    return list(self._input_device_labels)
+
+  @Property(list, notify=devicesChanged)
+  def outputDeviceLabels(self) -> list[str]:
+    return list(self._output_device_labels)
+
+  @Property(list, notify=devicesChanged)
+  def modelLabels(self) -> list[str]:
+    return list(self._model_labels)
+
+  @Property(int, notify=devicesChanged)
+  def selectedInputDeviceIndex(self) -> int:
+    return self._selected_input_device_index
+
+  @Property(int, notify=devicesChanged)
+  def selectedOutputDeviceIndex(self) -> int:
+    return self._selected_output_device_index
+
+  @Property(int, notify=devicesChanged)
+  def selectedModelIndex(self) -> int:
+    return self._selected_model_index
+
+  @Property(bool, notify=devicesChanged)
+  def liveCanStart(self) -> bool:
+    return self._live_can_start
+
+  @Property(str, notify=devicesChanged)
+  def liveBlockReason(self) -> str:
+    return self._live_block_reason
+
+  @Property(bool, notify=devicesChanged)
+  def devicesLocked(self) -> bool:
+    return self._devices_locked
+
+  @Property(bool, notify=devicesChanged)
+  def showAllDevices(self) -> bool:
+    return self._show_all_devices
+
+  def set_device_choices(
+    self,
+    *,
+    input_labels: list[str],
+    output_labels: list[str],
+    model_labels: list[str],
+    selected_input_index: int,
+    selected_output_index: int,
+    selected_model_index: int,
+    live_can_start: bool,
+    live_block_reason: str,
+    show_all_devices: bool = False,
+  ) -> None:
+    self._input_device_labels = list(input_labels)
+    self._output_device_labels = list(output_labels)
+    self._model_labels = list(model_labels)
+    self._selected_input_device_index = selected_input_index
+    self._selected_output_device_index = selected_output_index
+    self._selected_model_index = selected_model_index
+    self._live_can_start = live_can_start
+    self._live_block_reason = live_block_reason
+    self._show_all_devices = show_all_devices
+    self.devicesChanged.emit()
+
+  def set_devices_locked(self, locked: bool) -> None:
+    if self._devices_locked == locked:
+      return
+    self._devices_locked = locked
+    self.devicesChanged.emit()
+
   def set_demo_assets(
     self,
     *,
@@ -372,6 +453,31 @@ class GUIBridge(QObject):
   def selectAbEnhanced(self) -> None:
     if self._session is not None:
       self._session.set_ab_enhanced()
+
+  @Slot(int)
+  def selectInputDevice(self, index: int) -> None:
+    if self._session is not None:
+      self._session.select_input_device(index)
+
+  @Slot(int)
+  def selectOutputDevice(self, index: int) -> None:
+    if self._session is not None:
+      self._session.select_output_device(index)
+
+  @Slot(int)
+  def selectModel(self, index: int) -> None:
+    if self._session is not None:
+      self._session.select_model(index)
+
+  @Slot()
+  def refreshDevices(self) -> None:
+    if self._session is not None:
+      self._session.refresh_devices()
+
+  @Slot(bool)
+  def setShowAllDevices(self, show_all: bool) -> None:
+    if self._session is not None:
+      self._session.set_show_all_devices(show_all)
 
   @Property(list, notify=historyUpdated)
   def procTimeHistory(self) -> list[float]:

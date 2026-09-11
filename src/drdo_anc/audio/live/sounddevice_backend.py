@@ -30,9 +30,12 @@ def list_audio_devices() -> list[dict[str, Any]]:
     """
 
     sd = _import_sounddevice()
+    hostapis = sd.query_hostapis()
     devices: list[dict[str, Any]] = []
 
     for index, info in enumerate(sd.query_devices()):
+        hostapi_index = int(info["hostapi"])
+        hostapi_name = str(hostapis[hostapi_index]["name"])
         devices.append(
             {
                 "index": index,
@@ -40,7 +43,8 @@ def list_audio_devices() -> list[dict[str, Any]]:
                 "max_input_channels": info["max_input_channels"],
                 "max_output_channels": info["max_output_channels"],
                 "default_sample_rate": info["default_samplerate"],
-                "hostapi": info["hostapi"],
+                "hostapi": hostapi_index,
+                "hostapi_name": hostapi_name,
             }
         )
 
