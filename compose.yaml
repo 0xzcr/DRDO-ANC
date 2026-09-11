@@ -1,0 +1,14 @@
+services:
+  drdo-anc:
+    build:
+      context: .
+      args:
+        DEEPFILTERNET_REPO: ${DEEPFILTERNET_REPO:-https://github.com/Rikorose/DeepFilterNet.git}
+    image: drdo-anc:latest
+    devices:
+      - /dev/snd:/dev/snd
+    restart: unless-stopped
+    command:
+      - --model
+      - DeepFilterNet3
+      - --diagnose-audio

@@ -29,3 +29,24 @@ Run the fine-tuned model after setup:
 source .venv/bin/activate
 python scripts/run_live_enhancement.py --model DeepFilterNet3-Finetuned
 ```
+
+## Docker
+
+The Docker image targets Linux audio hosts and supports `linux/amd64` and
+`linux/arm64` builds. It runs the existing local microphone-to-speaker CLI;
+it does not yet provide Pi-to-PC network audio transport.
+
+Build and run on a Linux audio host:
+
+```bash
+docker compose build
+docker compose run --rm --device /dev/snd drdo-anc --list-devices
+docker compose up
+```
+
+The DeepFilterNet checkout must provide the native `libdf.so` API expected by
+this project. Use a compatible fork at build time when necessary:
+
+```bash
+DEEPFILTERNET_REPO=https://github.com/your-org/DeepFilterNet.git docker compose build
+```

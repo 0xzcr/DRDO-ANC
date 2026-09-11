@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+*.pyc
+.tmp
+.cargo
+.pip-build-tracker
+data
+external
+*.wav
+*.mp3
+*.flac
+*.csv
+*.zip
+*.tar
+*.tar.bz2
+*.tar.xz
