@@ -1,6 +1,10 @@
 import argparse
+import os
 import sys
 from pathlib import Path
+
+src_dir = Path(__file__).resolve().parent.parent / "src"
+sys.path.insert(0, os.fspath(src_dir))
 
 from drdo_anc.audio.live import (
     StreamingPipeline,

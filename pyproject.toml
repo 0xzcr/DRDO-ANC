@@ -9,10 +9,32 @@ description = "AI/ML-enabled adaptive noise cancellation for defence communicati
 requires-python = ">=3.11"
 dependencies = [
     "sounddevice>=0.5",
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "torch>=2.2",
 ]
 
 [project.optional-dependencies]
 gui = ["PySide6>=6.6"]
+evaluation = [
+    "scipy>=1.10",
+    "pesq>=0.0.4",
+    "pystoi>=2.3.0",
+]
+training = [
+    "scikit-learn>=1.3",
+    "joblib>=1.3",
+    "huggingface-hub>=0.20",
+]
+all = [
+    "PySide6>=6.6",
+    "scipy>=1.10",
+    "pesq>=0.0.4",
+    "pystoi>=2.3.0",
+    "scikit-learn>=1.3",
+    "joblib>=1.3",
+    "huggingface-hub>=0.20",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

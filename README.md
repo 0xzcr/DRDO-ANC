@@ -10,10 +10,38 @@ bash scripts/setup_raspberry_pi.sh
 source .venv/bin/activate
 ```
 
-The setup script creates `.venv`, installs the project and GUI/audio
+The setup script creates `.venv`, installs the project and core audio
 dependencies, builds the DeepFilterNet Python extension, validates the
 checked-in fine-tuned artifact, and requires the Linux native library at
 `external/DeepFilterNet/target/release/libdf.so`.
+
+The package metadata provides optional groups for non-live workflows:
+
+```bash
+pip install -e ".[evaluation]"  # PESQ, STOI, and SciPy metrics
+pip install -e ".[training]"    # scikit-learn and dataset helpers
+```
+
+The Raspberry Pi setup is headless by default because PySide6 wheels are not
+available for every ARM64/Python/glibc combination. The live audio CLI does
+not need PySide6. To opt into the GUI installation, use:
+
+```bash
+DRDO_ANC_INSTALL_GUI=1 bash scripts/setup_raspberry_pi.sh
+```
+
+Re-running the setup command is safe: it reuses `.venv`, existing Python
+packages, the DeepFilterNet checkout, and an existing native build. To force
+dependency checks and rebuild the native extension:
+
+```bash
+DRDO_ANC_FORCE_SETUP=1 bash scripts/setup_raspberry_pi.sh
+```
+
+If that fails with `no matching distribution for shiboken6`, use a newer
+64-bit Raspberry Pi OS/Python combination with a compatible PySide6 wheel, or
+run the GUI on a desktop machine. PySide6 and shiboken6 must be installed at
+the same version.
 
 If `external/DeepFilterNet` already exists, the script reuses it. Set
 `DEEPFILTERNET_REPO` only when a compatible fork is required:

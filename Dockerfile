@@ -1,6 +1,7 @@
 FROM python:3.11-slim-bookworm
 
 ARG DEEPFILTERNET_REPO=https://github.com/Rikorose/DeepFilterNet.git
+ARG INSTALL_GUI=0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -29,11 +30,11 @@ COPY models ./models
 
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install --no-cache-dir \
-        -e ".[gui]" \
-        soundfile \
-        numpy \
-        torch \
-        'maturin>=1.3,<1.5'
+        -e . \
+        'maturin>=1.3,<1.5' \
+    && if [ "${INSTALL_GUI}" = "1" ]; then \
+        python -m pip install --no-cache-dir 'PySide6>=6.6'; \
+    fi
 
 RUN mkdir -p external \
     && git clone --depth 1 "${DEEPFILTERNET_REPO}" external/DeepFilterNet \
@@ -42,7 +43,8 @@ RUN mkdir -p external \
     && test -f target/release/libdf.so \
     && test -f models/DeepFilterNet3_onnx.tar.gz
 
-RUN python -c "import df, numpy, sounddevice, soundfile, torch, PySide6"
+RUN python -c "import df, numpy, sounddevice, soundfile, torch" \
+    && if [ "${INSTALL_GUI}" = "1" ]; then python -c "import PySide6"; fi
 
 ENTRYPOINT ["python", "scripts/run_live_enhancement.py"]
 CMD ["--model", "DeepFilterNet3", "--diagnose-audio"]
