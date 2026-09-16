@@ -1,11 +1,12 @@
 FROM python:3.11-slim-bookworm
 
 ARG DEEPFILTERNET_REPO=https://github.com/Rikorose/DeepFilterNet.git
-ARG DEEPFILTERNET_REF=main
+ARG DEEPFILTERNET_REF=v0.5.6
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/opt/drdo-anc/external/DeepFilterNet/DeepFilterNet \
     PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
 RUN apt-get update \
@@ -72,7 +73,7 @@ RUN mkdir -p external \
     && nm -D target/release/libdf.so | grep -q 'df_free'
 
 RUN python -m pip check \
-    && python -c "import df, numpy, sounddevice, soundfile, torch, PySide6"
+    && python -c "import df, numpy, sounddevice, soundfile, torch, torchaudio; assert int(numpy.__version__.split('.')[0]) < 2; assert torch.__version__.split('+')[0] == torchaudio.__version__.split('+')[0]; print('DRDO-ANC and DeepFilterNet dependencies: OK')"
 
 ENTRYPOINT ["python", "scripts/run_live_enhancement.py"]
 CMD ["--model", "DeepFilterNet3", "--diagnose-audio"]

@@ -6,8 +6,10 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly VENV_DIR="${PROJECT_ROOT}/.venv"
 readonly DF_DIR="${PROJECT_ROOT}/external/DeepFilterNet"
+readonly DF_PY_DIR="${DF_DIR}/DeepFilterNet"
 readonly MODEL_ROOT="${PROJECT_ROOT}/models/dfn3_finetuned"
 readonly DF_REPO="${DEEPFILTERNET_REPO:-https://github.com/Rikorose/DeepFilterNet.git}"
+readonly DF_REF="${DEEPFILTERNET_REF:-v0.5.6}"
 readonly INSTALL_GUI="${DRDO_ANC_INSTALL_GUI:-0}"
 readonly FORCE_SETUP="${DRDO_ANC_FORCE_SETUP:-0}"
 readonly BUILD_TMP="${PROJECT_ROOT}/.tmp"
@@ -36,6 +38,7 @@ command -v python3 >/dev/null || die "python3 is required"
 command -v git >/dev/null || die "git is required"
 command -v cargo >/dev/null || die "cargo is required; install Rust/Cargo before running setup"
 command -v rustc >/dev/null || die "rustc is required; install Rust before running setup"
+command -v nm >/dev/null || die "nm is required; install binutils before running setup"
 
 case "${INSTALL_GUI}" in
   0|1) ;;
@@ -74,7 +77,7 @@ if [[ "${FORCE_SETUP}" == "1" || ! -f "${VENV_READY_MARKER}" ]]; then
 fi
 
 if [[ "${FORCE_SETUP}" == "1" ]] || ! python -c \
-  'import numpy, sounddevice, soundfile, torch' >/dev/null 2>&1 || \
+  'import appdirs, loguru, numpy, packaging, requests, sounddevice, soundfile, sympy, torch, torchaudio' >/dev/null 2>&1 || \
   ! python -m pip show drdo-anc maturin >/dev/null 2>&1; then
   python -m pip install \
     --no-cache-dir \
@@ -97,10 +100,25 @@ fi
 
 mkdir -p "${PROJECT_ROOT}/external"
 if [[ ! -d "${DF_DIR}" ]]; then
-  git clone --depth 1 "${DF_REPO}" "${DF_DIR}"
+  git clone --depth 1 --branch "${DF_REF}" "${DF_REPO}" "${DF_DIR}"
 elif [[ ! -f "${DF_DIR}/pyDF/Cargo.toml" ]]; then
   die "${DF_DIR} exists but is not a DeepFilterNet source checkout"
+else
+  checkout_ref="$(git -C "${DF_DIR}" describe --tags --exact-match 2>/dev/null || true)"
+  if [[ "${checkout_ref}" != "${DF_REF}" ]]; then
+    die "existing DeepFilterNet checkout is ${checkout_ref:-unknown}; expected ${DF_REF}. Set DEEPFILTERNET_REF to the tested checkout ref or replace it."
+  fi
 fi
+[[ -d "${DF_PY_DIR}/df" ]] || die "DeepFilterNet Python package is missing: ${DF_PY_DIR}/df"
+
+python - <<PY
+from pathlib import Path
+import site
+
+target = Path(site.getsitepackages()[0]) / "drdo_anc_deepfilternet.pth"
+target.write_text("${DF_PY_DIR}\\n", encoding="utf-8")
+print(f"DeepFilterNet Python path: {target}")
+PY
 
 [[ -f "${MODEL_ROOT}/live-finetuned/models/dfn3-epoch-130-onnx/_export_model/config.ini" ]] \
   || die "fine-tuned export config.ini is missing"
@@ -113,6 +131,7 @@ done
 
 native_library="${DF_DIR}/target/release/libdf.so"
 if [[ "${FORCE_SETUP}" == "1" || ! -f "${native_library}" ]] || \
+   ! nm -D "${native_library}" 2>/dev/null | grep -q 'df_create' || \
    ! python -c 'import df' >/dev/null 2>&1; then
 (
   cd "${DF_DIR}"
@@ -146,9 +165,34 @@ import numpy
 import sounddevice
 import soundfile
 import torch
+import torchaudio
+
+torch_version = torch.__version__.split("+")[0]
+torchaudio_version = torchaudio.__version__.split("+")[0]
+if int(numpy.__version__.split(".")[0]) >= 2:
+    raise RuntimeError(f"DeepFilterNet requires NumPy <2.0, found {numpy.__version__}")
+if torch_version != torchaudio_version:
+    raise RuntimeError(
+        f"Torch/TorchAudio versions must match: {torch_version} != {torchaudio_version}"
+    )
 print("DRDO-ANC dependencies: OK")
 print(f"Python: {__import__('sys').version.split()[0]}")
 print(f"PyTorch: {torch.__version__}")
+print(f"TorchAudio: {torchaudio.__version__}")
+PY
+
+for symbol in df_create df_process_frame df_free; do
+  nm -D "${native_library}" | grep -q "${symbol}" \
+    || die "native DeepFilterNet library is missing symbol: ${symbol}"
+done
+
+python - <<'PY'
+from drdo_anc.enhancement import create_enhancer
+
+enhancer = create_enhancer("DeepFilterNet3-Finetuned")
+if enhancer.sample_rate() != 48_000:
+    raise RuntimeError(f"Expected 48000 Hz model, got {enhancer.sample_rate()} Hz")
+print("Fine-tuned DeepFilterNet3 model: OK")
 PY
 
 if [[ "${INSTALL_GUI}" == "1" ]]; then

@@ -9,9 +9,15 @@ description = "AI/ML-enabled adaptive noise cancellation for defence communicati
 requires-python = ">=3.11"
 dependencies = [
     "sounddevice>=0.5",
-    "numpy>=1.24",
-    "soundfile>=0.12",
-    "torch>=2.2",
+    "numpy>=1.22,<2.0",
+    "soundfile>=0.10,<0.13",
+    "torch>=2.2,<3.0",
+    "torchaudio>=2.2,<3.0",
+    "loguru>=0.5",
+    "appdirs>=1.4",
+    "requests>=2.27",
+    "packaging>=23,<25",
+    "sympy>=1.6",
 ]
 
 [project.optional-dependencies]

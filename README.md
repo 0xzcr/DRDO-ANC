@@ -22,6 +22,12 @@ pip install -e ".[evaluation]"  # PESQ, STOI, and SciPy metrics
 pip install -e ".[training]"    # scikit-learn and dataset helpers
 ```
 
+The live stack intentionally follows DeepFilterNet's compatibility range:
+NumPy stays below 2.0, and `torch`/`torchaudio` are installed together below
+major version 3. The setup script also exposes the cloned DeepFilterNet
+Python package beside its compiled `libdf` extension, so both come from the
+same checkout.
+
 The Raspberry Pi setup is headless by default because PySide6 wheels are not
 available for every ARM64/Python/glibc combination. The live audio CLI does
 not need PySide6. To opt into the GUI installation, use:
@@ -49,6 +55,13 @@ If `external/DeepFilterNet` already exists, the script reuses it. Set
 ```bash
 DEEPFILTERNET_REPO=https://github.com/your-org/DeepFilterNet.git \\
   bash scripts/setup_raspberry_pi.sh
+```
+
+The default DeepFilterNet checkout is the stable `v0.5.6` release. Override
+it only when using a tested compatible revision:
+
+```bash
+DEEPFILTERNET_REF=v0.5.6 bash scripts/setup_raspberry_pi.sh
 ```
 
 Run the fine-tuned model after setup:
