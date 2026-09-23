@@ -7,10 +7,12 @@ src_dir = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, os.fspath(src_dir))
 
 from drdo_anc.audio.live import (
+    NetworkAudioOutput,
     StreamingPipeline,
     close_sounddevice_io,
     create_live_recorder,
     format_device_listing,
+    open_sounddevice_input,
     open_sounddevice_io,
 )
 from drdo_anc.enhancement import create_enhancer, get_model_config, list_models
@@ -55,7 +57,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "\n"
             "Device selection:\n"
             "  Use --list-devices to show PortAudio indices and host APIs.\n"
-            "  Input and output share one duplex PortAudio stream.\n"
+            "  Input and output share one duplex PortAudio stream unless\n"
+            "  --network-output is set (capture-only + UDP to a Pi receiver).\n"
+            "\n"
+            "Network output:\n"
+            "  --network-output HOST:PORT sends enhanced (or pass-through)\n"
+            "  mono 48 kHz audio as 10 ms UDP packets. AI inference stays on\n"
+            "  this host. Do not combine with --output-device.\n"
             "\n"
             "Shutdown:\n"
             "  Ctrl+C stops the stream. Enhancement mode calls flush() once.\n"
@@ -102,6 +110,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-device",
         default=None,
         help="Output device index or name (sounddevice/PortAudio).",
+    )
+    parser.add_argument(
+        "--network-output",
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Send enhanced audio over UDP to a Raspberry Pi receiver "
+            "instead of the local speaker."
+        ),
     )
     parser.add_argument(
         "--diagnose-audio",
@@ -156,8 +173,16 @@ def main() -> None:
     if sample_rate <= 0:
         raise SystemExit("--sample-rate must be positive.")
 
+    if args.network_output and args.output_device is not None:
+        raise SystemExit(
+            "--network-output cannot be combined with --output-device. "
+            "Local speaker mode is unchanged; omit --output-device to send "
+            "UDP to the Raspberry Pi receiver."
+        )
+
     input_device = _parse_device(args.input_device)
     output_device = _parse_device(args.output_device)
+    network_endpoint = args.network_output
 
     print("=" * 70)
     print("DRDO-ANC | Live Audio Streaming")
@@ -166,9 +191,16 @@ def main() -> None:
     print(f"Sample rate: {sample_rate} Hz")
     print(f"Chunk size:  {args.chunk_size} samples/read")
     print(f"Input dev:   {input_device if input_device is not None else 'default'}")
-    print(
-        f"Output dev:  {output_device if output_device is not None else 'default'}"
-    )
+    if network_endpoint is not None:
+        print(f"Output:      UDP {network_endpoint}")
+        print(
+            "Note:        AI inference runs on this Windows host. "
+            "The Raspberry Pi is a network audio endpoint only."
+        )
+    else:
+        print(
+            f"Output dev:  {output_device if output_device is not None else 'default'}"
+        )
 
     recorder = None
 
@@ -178,6 +210,7 @@ def main() -> None:
             "mode": mode_label,
             "input_device": input_device,
             "output_device": output_device,
+            "network_output": network_endpoint,
             "chunk_size": args.chunk_size,
         }
 
@@ -198,19 +231,31 @@ def main() -> None:
     print("\nPress Ctrl+C to stop.")
     print("=" * 70)
 
-    audio_input, audio_output = open_sounddevice_io(
-        sample_rate,
-        input_device=input_device,
-        output_device=output_device,
-        blocksize=args.chunk_size,
-    )
-
-    print(
-        f"Host capture channels:  {audio_input.host_input_channels}"
-    )
-    print(
-        f"Host playback channels: {audio_output.host_output_channels}"
-    )
+    if network_endpoint is not None:
+        audio_input = open_sounddevice_input(
+            sample_rate,
+            input_device=input_device,
+            blocksize=args.chunk_size,
+        )
+        audio_output = NetworkAudioOutput(
+            network_endpoint,
+            sample_rate=sample_rate,
+        )
+        print(f"Host capture channels:  {audio_input.host_input_channels}")
+        print("Host playback channels: (network UDP, mono packets)")
+    else:
+        audio_input, audio_output = open_sounddevice_io(
+            sample_rate,
+            input_device=input_device,
+            output_device=output_device,
+            blocksize=args.chunk_size,
+        )
+        print(
+            f"Host capture channels:  {audio_input.host_input_channels}"
+        )
+        print(
+            f"Host playback channels: {audio_output.host_output_channels}"
+        )
 
     pipeline = StreamingPipeline(
         audio_input,
@@ -224,7 +269,11 @@ def main() -> None:
     try:
         pipeline.run(diagnose=args.diagnose_audio)
     finally:
-        close_sounddevice_io(audio_input, audio_output)
+        if network_endpoint is not None:
+            audio_input.close()
+            audio_output.close()
+        else:
+            close_sounddevice_io(audio_input, audio_output)
 
     if recorder is not None:
         if recorder.dropped_chunks > 0:
