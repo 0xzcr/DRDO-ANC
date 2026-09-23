@@ -30,9 +30,12 @@ def list_audio_devices() -> list[dict[str, Any]]:
     """
 
     sd = _import_sounddevice()
+    hostapis = sd.query_hostapis()
     devices: list[dict[str, Any]] = []
 
     for index, info in enumerate(sd.query_devices()):
+        hostapi_index = int(info["hostapi"])
+        hostapi_name = str(hostapis[hostapi_index]["name"])
         devices.append(
             {
                 "index": index,
@@ -40,7 +43,8 @@ def list_audio_devices() -> list[dict[str, Any]]:
                 "max_input_channels": info["max_input_channels"],
                 "max_output_channels": info["max_output_channels"],
                 "default_sample_rate": info["default_samplerate"],
-                "hostapi": info["hostapi"],
+                "hostapi": hostapi_index,
+                "hostapi_name": hostapi_name,
             }
         )
 
@@ -418,6 +422,109 @@ class SoundDevicePlaybackSession:
         self._closed = True
 
 
+class SoundDeviceCaptureSession:
+    """
+    Capture-only PortAudio stream for network-output live mode.
+
+    Local speakers are not opened. ``SoundDeviceAudioInput`` is reused.
+    """
+
+    close_from_input = True
+
+    def __init__(
+        self,
+        sample_rate: int,
+        *,
+        input_device: int | str | None = None,
+        blocksize: int = 0,
+        latency: str | float = "high",
+    ) -> None:
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be positive.")
+
+        sd = _import_sounddevice()
+
+        self._sample_rate = sample_rate
+        self._input_device = input_device
+        self._input_channels = _device_channel_count(
+            input_device,
+            "input",
+        )
+        self._blocksize = blocksize
+        self._started = False
+        self._closed = False
+        self.stats = SoundDeviceStreamStats(
+            sample_rate=sample_rate,
+            input_channels=self._input_channels,
+            output_channels=0,
+            blocksize=blocksize,
+        )
+
+        self._stream = sd.InputStream(
+            samplerate=sample_rate,
+            device=input_device,
+            channels=self._input_channels,
+            dtype="float32",
+            blocksize=blocksize,
+            latency=latency,
+        )
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def input_channels(self) -> int:
+        return self._input_channels
+
+    def _ensure_started(self) -> None:
+        if self._closed:
+            raise RuntimeError("Capture session is closed.")
+
+        if not self._started:
+            self._stream.start()
+            self._started = True
+            self.stats.mark_start()
+
+    def read_mono(self, frames: int) -> tuple[np.ndarray, bool]:
+        if frames <= 0:
+            return np.empty(0, dtype=np.float32), False
+
+        self._ensure_started()
+
+        data, overflowed = self._stream.read(frames)
+        mono = downmix_to_mono(data)
+
+        if overflowed:
+            self.stats.input_overflows += 1
+
+        if mono.size > 0:
+            self.stats.peak_input = max(
+                self.stats.peak_input,
+                float(np.max(np.abs(mono))),
+            )
+            self.stats.samples_read += int(mono.size)
+
+        self.stats.chunks_processed += 1
+
+        return mono, bool(overflowed)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self.stats.mark_stop()
+
+        if self._started and self._stream is not None:
+            self._stream.stop()
+
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+
+        self._closed = True
+
+
 def open_sounddevice_io(
     sample_rate: int,
     *,
@@ -472,6 +579,24 @@ def close_sounddevice_output(audio_output: SoundDeviceAudioOutput) -> None:
     audio_output.close()
 
 
+def open_sounddevice_input(
+    sample_rate: int,
+    *,
+    input_device: int | str | None = None,
+    blocksize: int = 0,
+    latency: str | float = "high",
+) -> SoundDeviceAudioInput:
+    """Open a capture-only microphone stream (no local speaker)."""
+
+    session = SoundDeviceCaptureSession(
+        sample_rate,
+        input_device=input_device,
+        blocksize=blocksize,
+        latency=latency,
+    )
+    return SoundDeviceAudioInput(session)
+
+
 class SoundDeviceAudioInput(AudioInput):
     """
     Desktop microphone capture via a shared duplex PortAudio stream.
@@ -508,6 +633,8 @@ class SoundDeviceAudioInput(AudioInput):
 
     def close(self) -> None:
         self._closed = True
+        if getattr(self._session, "close_from_input", False):
+            self._session.close()
 
 
 class SoundDeviceAudioOutput(AudioOutput):

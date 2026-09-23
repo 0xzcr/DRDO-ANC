@@ -42,6 +42,29 @@ from .multimic import (
     compute_rms,
     estimate_relative_delay_samples,
 )
+from .network_output import NetworkAudioOutput
+from .network_playback import (
+    AlsaAplayOutput,
+    is_alsa_hw_device,
+    open_receiver_output,
+)
+from .network_protocol import (
+    DEFAULT_SAMPLE_RATE as NETWORK_SAMPLE_RATE,
+    DEFAULT_SAMPLES_PER_PACKET,
+    AudioPacket,
+    PacketError,
+    decode_packet,
+    encode_packet,
+    mono_to_stereo,
+    parse_endpoint,
+)
+from .network_receiver import (
+    DEFAULT_JITTER_CAPACITY,
+    DEFAULT_JITTER_PREFILL,
+    JitterBuffer,
+    NetworkAudioReceiver,
+    ReceiverStats,
+)
 from .pipeline import StreamingPipeline
 from .recorder import (
     LiveInstrumentation,
@@ -73,14 +96,17 @@ from .sounddevice_backend import (
     downmix_to_mono,
     format_device_listing,
     list_audio_devices,
+    open_sounddevice_input,
     open_sounddevice_io,
     open_sounddevice_output,
     upmix_mono_to_channels,
 )
 
 __all__ = [
+    "AlsaAplayOutput",
     "AudioInput",
     "AudioOutput",
+    "AudioPacket",
     "ChannelPairAnalysis",
     "ChannelRouter",
     "COUNTDOWN_SECONDS",
@@ -89,17 +115,26 @@ __all__ = [
     "DualMicResidualFrame",
     "FakeAudioInput",
     "FakeAudioOutput",
+    "DEFAULT_JITTER_CAPACITY",
+    "DEFAULT_JITTER_PREFILL",
+    "DEFAULT_SAMPLES_PER_PACKET",
     "FakeMultiChannelAudioInput",
     "INDEPENDENT_CAPTURE_CONDITIONS",
     "IndependentCaptureResult",
     "IndependentMicConfig",
     "IndependentPairAnalysis",
+    "JitterBuffer",
     "LiveInstrumentation",
     "LiveRecordingPaths",
     "LiveStreamRecorder",
     "ABQueuedPlaybackOutput",
     "QueuedPlaybackOutput",
     "MultiMicConfig",
+    "NETWORK_SAMPLE_RATE",
+    "NetworkAudioOutput",
+    "NetworkAudioReceiver",
+    "PacketError",
+    "ReceiverStats",
     "ReplayResult",
     "RoutedPrimaryAudioInput",
     "SoundDeviceAudioInput",
@@ -108,6 +143,10 @@ __all__ = [
     "SoundDeviceMultiChannelInput",
     "SoundDeviceStreamStats",
     "StreamingPipeline",
+    "decode_packet",
+    "encode_packet",
+    "is_alsa_hw_device",
+    "mono_to_stereo",
     "analyze_channel_pair",
     "analyze_independent_pair",
     "close_sounddevice_io",
@@ -128,7 +167,10 @@ __all__ = [
     "downmix_to_mono",
     "format_device_listing",
     "list_audio_devices",
+    "open_receiver_output",
+    "open_sounddevice_input",
     "open_sounddevice_io",
     "open_sounddevice_output",
+    "parse_endpoint",
     "upmix_mono_to_channels",
 ]
